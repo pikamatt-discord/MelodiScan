@@ -1,16 +1,26 @@
-# Virtualenv
+# Python / Virtualenv
 venv/
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 
-# Flutter/Dart
+# Flutter & Dart build artifacts
 .dart_tool/
 .fvm/
-build/
 .pub-cache/
 .pub/
+build/
+mobile/build/
+mobile/.dart_tool/
+mobile/.pub-cache/
+mobile/.pub/
+mobile/.idea/
 
-# Docker / Temp data
+# IDEs & System files
+.DS_Store
+
+# Docker / Temp data / Large binaries
 data/temp/
+data/apk/
 *.log

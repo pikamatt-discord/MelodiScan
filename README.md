@@ -3,26 +3,39 @@
 <p align="center">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="220" height="220">
     <defs>
+      <!-- Dégradés -->
       <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
         <stop offset="0%" stop-color="#9D4EDD" />
         <stop offset="100%" stop-color="#4A00E0" />
       </linearGradient>
+      
       <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="0%">
         <stop offset="0%" stop-color="#00F2FE" />
         <stop offset="100%" stop-color="#4FACFE" />
       </linearGradient>
     </defs>
+
+    <!-- Arrière-plan style App Icon (Squircle) -->
     <rect width="512" height="512" rx="115" fill="#0D0E15" />
+
+    <!-- Viseur de Scan Optique (Coins) -->
     <g stroke="url(#cyanGrad)" stroke-width="10" stroke-linecap="round" fill="none">
+      <!-- Haut-Gauche -->
       <path d="M 116 176 L 116 136 Q 116 116 136 116 L 176 116" />
+      <!-- Haut-Droite -->
       <path d="M 336 116 L 376 116 Q 396 116 396 136 L 396 176" />
+      <!-- Bas-Gauche -->
       <path d="M 116 336 L 116 376 Q 116 396 136 396 L 176 396" />
+      <!-- Bas-Droite -->
       <path d="M 336 396 L 376 396 Q 396 396 396 376 L 396 336" />
     </g>
+
+    <!-- Onde Sonore / Égaliseur centré -->
     <g fill="url(#purpleGrad)">
       <rect x="160" y="226" width="18" height="60" rx="9" />
       <rect x="196" y="186" width="18" height="140" rx="9" />
       <rect x="232" y="156" width="18" height="200" rx="9" />
+      <!-- Barre centrale -->
       <rect x="268" y="136" width="18" height="240" rx="9" fill="url(#cyanGrad)" />
       <rect x="304" y="176" width="18" height="160" rx="9" />
       <rect x="340" y="206" width="18" height="100" rx="9" />
@@ -32,86 +45,98 @@
 
 **MelodiScan** est un écosystème logiciel open-source, auto-hébergeable et décentralisé conçu pour numériser, analyser et synthétiser des partitions musicales physiques ou numériques en flux interactifs audio et visuels.
 
+Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
+
 ---
 
-## ⚡ Installation Ultra-Simple sur Serveur Ubuntu (1-Command Install)
+## ⚡ Installation & Déploiement 1-Commande (Serveur Ubuntu)
 
-Pour installer et démarrer l'ensemble du serveur domestique (Docker Compose + Dashboard local + génération d'APK), exécutez simplement :
+Pour installer et démarrer l'ensemble du serveur domestique (Docker Compose + Dashboard local + compilation/hébergement de l'APK), exécutez la commande suivante :
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/melodiscan/melodiscan/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/pikamatt-discord/MelodiScan/main/install.sh | bash
 ```
 
 Ou en clonant le dépôt :
 
 ```bash
-git clone https://github.com/melodiscan/melodiscan.git
-cd melodiscan
+git clone https://github.com/pikamatt-discord/MelodiScan.git
+cd MelodiScan
 chmod +x install.sh
 ./install.sh
 ```
 
-Le script installe automatiquement Docker, configure les conteneurs et lance le serveur. Accédez ensuite au **Dashboard Web local** à l'adresse :
+Le script s'occupe de tout :
+1. Installation de Docker et Docker Compose.
+2. Clonnage / Mise à jour du dépôt GitHub.
+3. Compilation du paquet Android Release APK (`mobile/build/app/outputs/flutter-apk/app-release.apk`).
+4. Lancement des conteneurs Docker (`melodiscan-api`, `melodiscan-worker`, `melodiscan-redis`).
+
+Accédez ensuite au **Dashboard Web d'Administration Local** :
 👉 **`http://localhost:8080/dashboard`**
 
 ---
 
-## 📱 Guide de Génération de l'APK & Tests sur Émulateur Android
+## 🔄 Procédure de Mise à Jour du Serveur et de l'Application
 
-### 1. Génération de l'APK Release
-Pour compiler le paquet Android APK de l'application Flutter :
+Pour mettre à jour le système vers la dernière version du dépôt officiel :
+
+```bash
+# Relancer simplement le script d'installation auto-update
+./install.sh
+
+# Ou manuellement via Docker :
+git pull origin main
+docker compose up -d --build
+```
+
+---
+
+## 📱 Guide de Compilation de l'APK & Tests sur Émulateur Android
+
+### 1. Compilation du Paquet APK Release
+Pour compiler l'application Flutter localement :
 
 ```bash
 cd mobile
+flutter pub get
 flutter build apk --release
 ```
-Le fichier généré se situe dans `mobile/build/app/outputs/flutter-apk/app-release.apk`.
 
-Sur le serveur, ce fichier est également disponible au téléchargement direct via :
-`http://localhost:8080/download/app-release.apk`
+Le fichier compilé est généré dans `mobile/build/app/outputs/flutter-apk/app-release.apk` (taille ~48 Mo).
 
-### 2. Configuration et Lancement de l'Émulateur Android
-Pour tester l'application sur un émulateur Android (AVD) :
+Le serveur MelodiScan héberge également ce fichier en téléchargement direct à l'adresse :
+👉 **`http://localhost:8080/download/app-release.apk`**
+
+### 2. Configuration & Lancement de l'Émulateur Android (AVD)
+Pour tester l'application sur un émulateur Android :
 
 ```bash
-# Lister les émulateurs disponibles
+# Lister les émulateurs disponibles sur votre machine
 flutter emulators
 
 # Démarrer un émulateur spécifique
 flutter emulators --launch <emulator_id>
 ```
 
-### 3. Installation et Exécution de l'APK sur l'Émulateur (ADB)
-Une fois l'émulateur Android démarré :
+### 3. Installation et Exécution de l'APK via ADB
+Une fois l'émulateur démarré :
 
 ```bash
-# Vérifier les appareils/émulateurs connectés
+# Lister les appareils et émulateurs connectés
 adb devices
 
-# Installer l'APK sur l'émulateur
+# Installer l'APK généré sur l'émulateur
 adb install -r mobile/build/app/outputs/flutter-apk/app-release.apk
 
-# Exécuter l'application en mode développement/debug interactif
+# Ou lancer l'application en mode debug/interactif
 cd mobile
-flutter run -d emulator-5554
+flutter run
 ```
 
 ---
 
 ## 🚀 Architecture Logicielle & Spécifications Techniques
-
-### 📚 Table des Matières
-
-1. [Vision du Projet & Topologie Système](#1-vision-du-projet--topologie-système)
-2. [Back-End Engine (FastAPI & OMR Failover)](#2-back-end-engine-fastapi--omr-failover)
-3. [Spécification des API REST & SSE Stream](#3-spécification-des-api-rest--sse-stream)
-4. [Front-End Client Mobile (Flutter cross-platform)](#4-front-end-client-mobile-flutter)
-5. [Conteneurisation & Déploiement Docker Compose](#5-conteneurisation--déploiement-docker-compose)
-6. [Commandes de Test & Vérification](#6-commandes-de-test--vérification)
-
----
-
-### 1. Vision du Projet & Topologie Système
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -136,78 +161,33 @@ flutter run -d emulator-5554
 │   │    ├── Primary: Audiveris CLI Engine (Headless JVM) │
 │   │    └── Fallback: HOMR Deep Learning Pipeline        │
 │   ├── Structural Music Engine (Partitura Pipeline)      │
-│   └── Dashboard & Local APK Download Server            │
+│   └── Dashboard Web & Serveur d'APK Mobile              │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 2. Back-End Engine (FastAPI & OMR Failover)
-
-Le backend Python est situé dans le répertoire `backend/` :
-* **FastAPI + Uvicorn :** Gateway REST pour la réception des fichiers, la diffusion d'événements SSE et l'affichage du Dashboard HTML local.
-* **Celery & Redis :** Traitement de tâches OMR en arrière-plan avec état synchronisé.
-* **Moteur OMR à Tolérance aux Pannes (Failover) :**
-  1. **Audiveris CLI (Primary) :** Exécution headless en Java 17 pour la reconnaissance des portées et des notes, produisant un fichier `.musicxml`.
-  2. **HOMR Engine (Fallback) :** Bascule automatique si le score de confiance d'Audiveris est $< 70\%$.
-* **Partitura Pipeline :** Validation syntaxique et conversion du fichier MusicXML vers un fichier MIDI (`.mid`) optimisé.
-
----
-
-### 3. Spécification des API REST & SSE Stream
+### Spécification des Routes API REST & Stream SSE
 
 | Méthode | Route | Description |
 | :--- | :--- | :--- |
-| `GET` | `/health` | Statut de santé de l'API. |
-| `GET` | `/dashboard` | Dashboard Web HTML local d'administration du serveur. |
-| `GET` | `/download/app-release.apk` | Téléchargement du paquet APK Android. |
-| `POST` | `/api/v1/scan` | Téléversement de l'image (PNG 1-bit/Couleur) + titre. Retourne un `task_id`. |
-| `GET` | `/api/v1/stream/{task_id}` | Stream SSE (`text/event-stream`) diffusant la progression en temps réel. |
-| `GET` | `/api/v1/result/{task_id}` | Téléchargement du fichier MIDI résultant (`.mid`). |
+| `GET` | `/health` | Vérification de santé du serveur API |
+| `GET` | `/dashboard` | Dashboard Web interactif d'administration du serveur |
+| `GET` | `/download/app-release.apk` | Téléchargement direct du paquet Android APK |
+| `POST` | `/api/v1/scan` | Téléversement de l'image de partition + métadonnées |
+| `GET` | `/api/v1/stream/{task_id}` | Flux SSE (`text/event-stream`) diffusant la progression OMR |
+| `GET` | `/api/v1/result/{task_id}` | Téléchargement de la partition synthétisée en fichier MIDI (`.mid`) |
 
 ---
 
-### 4. Front-End Client Mobile (Flutter)
+### Commandes de Test & Vérification
 
-L'application Flutter est située dans `mobile/` et offre une expérience moderne en **Theme Sombre (Dark Theme)** avec 3 écrans principaux :
-
-1. **`ScanScreen` (`mobile/lib/screens/scan_screen.dart`) :**
-   * Prétraitement d'image Edge (Binarisation de Sauvola, correction de perspective 2D).
-   * Envoi `http.MultipartRequest` vers l'API Gateway `/api/v1/scan`.
-2. **`StatusScreen` (`mobile/lib/screens/status_screen.dart`) :**
-   * Suivi du flux SSE en temps réel avec barre de progression et timeline visuelle des étapes du serveur.
-3. **`PlayerScreen` (`mobile/lib/screens/player_screen.dart`) :**
-   * Canvas interactif style Verovio.
-   * Time-stretching sans altération de pitch ($0.25x \to 2.0x$).
-   * Pitch-shifting (Transposition par demi-tons de $-12$ à $+12$).
-   * Bouclage A/B sur mesures spécifiques.
-   * Gestion multi-pistes/instruments (SoundFont2).
-
----
-
-### 5. Conteneurisation & Déploiement Docker Compose
-
-Le déploiement s'effectue via le fichier root `docker-compose.yml` :
-
-```bash
-docker compose up -d
-```
-
-Services conteneurisés :
-* `melodiscan-api` : Gateway FastAPI + Dashboard sur le port `8080`.
-* `melodiscan-worker` : Worker Celery pour le traitement OMR & Partitura.
-* `melodiscan-redis` : Courtier Redis 7-alpine.
-
----
-
-### 6. Commandes de Test & Vérification
-
-#### Backend (Python / FastAPI / pytest) :
+#### Tests Backend (pytest) :
 ```bash
 /app/venv/bin/python3 -m pytest backend/tests/test_main.py
 ```
 
-#### Mobile (Flutter / Dart) :
+#### Tests Frontend Mobile (flutter test) :
 ```bash
 cd mobile
 flutter test
