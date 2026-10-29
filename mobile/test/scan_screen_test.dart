@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:melodiscan_mobile/screens/scan_screen.dart';
 
 void main() {
-  testWidgets('Scan screen renders and toggles edge binarization', (WidgetTester tester) async {
+  testWidgets('Scan screen renders camera, gallery buttons and toggles edge binarization', (WidgetTester tester) async {
     await tester.pumpWidget(
       const ProviderScope(
         child: MaterialApp(
@@ -14,7 +14,9 @@ void main() {
     );
 
     expect(find.text('MelodiScan Scanner'), findsOneWidget);
-    
+    expect(find.text('Prendre en Photo'), findsOneWidget);
+    expect(find.text('Galerie (Multi)'), findsOneWidget);
+
     final binarizeButton = find.text('Binarisation Sauvola');
     expect(binarizeButton, findsOneWidget);
 
