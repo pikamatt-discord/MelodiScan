@@ -39,7 +39,7 @@
   </svg>
 </p>
 
-**MelodiScan** est un écosystème logiciel open-source, auto-hébergeable et décentralisé conçu pour numériser, analyser et synthétiser des partitions musicales physiques ou numériques en flux interactifs audio et visuels.
+**MelodiScan** est un prototype open-source et auto-hébergeable qui envoie une image de partition à un serveur OMR, suit le traitement et récupère un résultat MIDI quand la reconnaissance et la conversion aboutissent. Il ne simule pas de résultat lorsque le traitement échoue.
 
 Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 
@@ -51,12 +51,12 @@ Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 
 | Composant | Statut | Fonctionnalités Déployées |
 | :--- | :--- | :--- |
-| **API Backend (FastAPI)** | ✅ Opérationnel | Endpoints REST (`/api/v1/scan`, `/api/v1/result/{task_id}`), streaming SSE (`/api/v1/stream/{task_id}`), endpoint métriques (`/api/v1/stats`). |
-| **Moteur OMR & Processing** | ✅ Opérationnel | Architecture Failover (Primary Audiveris JVM + Fallback HOMR/Partitura), conversion MusicXML vers Standard MIDI File. |
-| **Dashboard Serveur Web** | ✅ Opérationnel | Dashboard HTML/CSS/JS sombre avec statistiques KPI live, rafraîchissement auto (polling 3s) et bouton de téléchargement APK direct. |
-| **Client Mobile (Flutter)** | ✅ Opérationnel | Scanner multi-pages avec boutons dédiés **"Prendre en Photo"** (Camera) et **"Galerie (Multi)"**, binarisation Sauvola, timeline SSE, et Player interactif (Tempo 0.25x-2x, Pitch Transposition -12/+12 st, Boucle A/B). |
-| **Compilation & Docker** | ✅ Opérationnel | Script `install.sh` 1-commande pour Ubuntu, conteneurisation `docker-compose.yml` (FastAPI, Celery Worker, Redis), et compilation réelle de l'APK Release (`mobile/build/app/outputs/flutter-apk/app-release.apk` ~48 Mo). |
-| **Tests Automatisés** | ✅ Opérationnel | Tests d'intégration pytest backend (100% pass) et widget tests Flutter (100% pass). |
+| **API Backend (FastAPI)** | Prototype | Envoi d’une image par tâche, suivi SSE, téléchargement MIDI uniquement après succès, statistiques et état de santé des dépendances. |
+| **Moteur OMR** | Intégré à l’image | Audiveris 5.10.0 est installé dans l’image Docker du backend/worker. Toute erreur OMR ou de conversion marque la tâche en échec ; aucun moteur de secours ni partition synthétique. |
+| **Dashboard serveur** | Prototype | Dashboard HTML avec statistiques issues des tâches et indication de disponibilité des dépendances. Le téléchargement APK n’est disponible que si un APK réel est présent. |
+| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image unique, envoi au serveur, suivi SSE et vérification/récupération du fichier MIDI. La lecture audio intégrée, le multi-pages et le prétraitement d’image ne sont pas implémentés. |
+| **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Audiveris. |
+| **Tests automatisés** | En cours | Tests ciblés backend et Flutter ; exécuter les commandes de test ci-dessous dans des environnements munis de leurs dépendances. |
 
 ---
 
@@ -65,11 +65,11 @@ Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 Pour transformer l'environnement actuel de développement/démonstration en une infrastructure de production industrielle à grande échelle, les éléments suivants doivent être complétés :
 
 #### A. Sécurité & Authentification (Security Layer)
-1. **Authentification par Clé API & JWT :** Implémenter un système de jetons JWT / API Keys locales pour sécuriser l'accès à l'API Gateway et au Dashboard Web d'administration.
-2. **Support HTTPS / TLS Reverse Proxy :** Ajouter une configuration Traefik ou Nginx Reverse Proxy avec génération automatique de certificats SSL Let's Encrypt / Certbot.
+1. **Configuration de l’authentification :** Les endpoints API acceptent une clé `API_KEY` et le dashboard un identifiant/mot de passe configurables. Ils restent désactivés sans ces variables pour le développement local ; ils doivent être activés avant toute exposition réseau. L’intégration JWT reste à évaluer si des comptes multi-utilisateurs deviennent nécessaires.
+2. **Certificat public pour un accès Internet :** Le déploiement fourni utilise Caddy et une CA locale ; un déploiement public devra utiliser un domaine et un certificat reconnu publiquement, par exemple via Let's Encrypt.
 
 #### B. Moteur OMR & Traitement Avancé (OMR Production Integration)
-1. **Déploiement complet des conteneurs Audiveris CLI & Deep Learning HOMR :** Intégrer les images Docker pré-compilées d'Audiveris v5.3+ et les poids PyTorch du modèle `homr` pour les partitions complexes polyphoniques à très haute densité.
+1. **Amélioration du traitement Audiveris :** Ajouter une validation de qualité et une correction manuelle des partitions reconnues. MelodiScan ne bascule pas sur un autre moteur si Audiveris échoue.
 2. **Correction Manuelle sur l'Application Mobile :** Ajouter un éditeur interactif permettant à l'utilisateur d'ajuster ou corriger manuellement les notes/mesures mal reconnues sur la partition avant l'exportation finale.
 
 #### C. Performance & Scalabilité (Infrastructure Scaling)
@@ -83,13 +83,13 @@ Pour transformer l'environnement actuel de développement/démonstration en une 
 
 ## ⚡ Installation & Déploiement 1-Commande (Serveur Ubuntu)
 
-Pour installer et démarrer l'ensemble du serveur domestique (Docker Compose + Dashboard local + compilation/hébergement de l'APK), exécutez la commande suivante :
+Sur un serveur Ubuntu x86_64 connecté au réseau local, exécutez cette commande depuis n’importe quel terminal :
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/pikamatt-discord/MelodiScan/main/install.sh | bash
 ```
 
-Ou en clonant le dépôt :
+Elle clone le dépôt dans `~/MelodiScan` si nécessaire. Pour installer depuis une copie déjà clonée :
 
 ```bash
 git clone https://github.com/pikamatt-discord/MelodiScan.git
@@ -98,14 +98,36 @@ chmod +x install.sh
 ./install.sh
 ```
 
-Le script s'occupe de tout :
-1. Installation de Docker et Docker Compose.
-2. Clonnage / Mise à jour du dépôt GitHub.
-3. Compilation du paquet Android Release APK (`mobile/build/app/outputs/flutter-apk/app-release.apk`).
-4. Lancement des conteneurs Docker (`melodiscan-api`, `melodiscan-worker`, `melodiscan-redis`).
+Le script automatise les étapes suivantes :
+1. Installe Docker/Compose si nécessaire, puis construit l’image backend avec Audiveris 5.10.0 et démarre l’API, le worker, Redis et Caddy.
+2. Détecte l’adresse IPv4 du serveur sur le réseau local et configure HTTPS pour cette adresse, sans réglage DNS.
+3. Génère et conserve une clé API et les identifiants du dashboard dans `.env` (permissions privées).
+4. Récupère la CA publique Caddy et l’intègre à l’APK. Flutter, le JDK et le SDK Android sont installés sur le serveur s’ils manquent.
+5. Compile l’APK préconfiguré avec l’adresse HTTPS et la clé API, puis le rend disponible dans `data/apk/app-release.apk`. Le récapitulatif affiche explicitement l’URL API exacte intégrée à l’APK.
 
-Accédez ensuite au **Dashboard Web d'Administration Local** :
-👉 **`http://localhost:8080/dashboard`**
+À la fin, le script affiche l’adresse du dashboard, l’URL API préconfigurée dans l’APK, les identifiants générés et le chemin de l’APK. L’URL API affichée est celle que l’application utilisera réellement (par exemple `https://192.168.1.25`), et non `localhost`. Le téléphone doit être sur le même réseau ; installez l’APK fourni, sans configurer de DNS ni installer de certificat sur le téléphone. La clé API est intégrée à cet APK : elle convient à un usage personnel/familial sur réseau local, mais ne constitue pas une authentification individuelle forte.
+
+Caddy utilise une autorité de certification locale conservée dans son volume Docker. Le certificat racine public est installé dans le magasin de confiance du serveur Linux pour que son navigateur puisse ouvrir le dashboard sans avertissement. Un navigateur sur un autre ordinateur/téléphone peut encore demander d’approuver cette CA ; l’application mobile compilée par le script lui fait déjà confiance. Une réservation DHCP est recommandée afin que l’adresse locale du serveur reste stable. Après un changement d’adresse, relancez `./install.sh` pour reconstruire l’APK et actualiser la configuration.
+
+L’installation Android requiert une connexion Internet et plusieurs téléchargements volumineux (Flutter et SDK Android). Le script est destiné à Ubuntu ; il s’arrête avec une erreur explicite si une étape nécessaire échoue. Il ne fabrique pas d’APK de remplacement. Le certificat racine public est copié dans `data/caddy-root.crt`; la clé privée de l’autorité reste dans le volume Docker `caddy_data` et ne doit pas être partagée ou supprimée.
+
+### Validation complète avant de partager l’installation
+
+Après l’installation, depuis le dossier `MelodiScan`, lancez une seule commande :
+
+```bash
+bash test-complet.sh
+```
+
+Le rapport vérifie la configuration et le build Docker/Audiveris, lance les tests pytest du backend dans un conteneur isolé, exécute analyse/tests Flutter et recompile l’APK de déploiement. Si les services sont démarrés, il teste aussi HTTPS avec la CA installée, l’authentification, les endpoints, le téléchargement et l’intégrité de l’APK, puis envoie volontairement une image PNG invalide pour confirmer que le worker transmet bien un échec réel sans fabriquer de MIDI. La tâche d’essai est retirée de l’historique Redis après vérification. Le script ne démarre ni n’arrête les services du serveur. Copiez toute la sortie affichée dans votre réponse ; elle n’inclut pas les secrets du fichier `.env`.
+
+Le script n’évalue pas la qualité de reconnaissance d’une partition valide : le dépôt ne fournit pas de partition de test de référence. Ce contrôle nécessite un vrai scan de partition et une sortie MIDI attendue à comparer.
+
+L’API sur le port 8080 reste accessible uniquement depuis la machine hôte pour le développement ; les appareils du réseau passent par HTTPS sur le port 443. Sans Redis, worker ou Audiveris, `/health` retourne `503` avec le détail des dépendances. Audiveris 5.10.0 est installé pendant la construction de l’image backend ; aucune autre solution n’est utilisée en cas d’échec.
+
+Hors installateur, les endpoints `/api/*` et `/download/*` acceptent une clé `API_KEY`; le dashboard peut être protégé avec `DASHBOARD_USERNAME` et `DASHBOARD_PASSWORD`. Sans configuration, l’authentification est désactivée pour le développement local ; n’exposez pas ce mode sur Internet. Le client Flutter de développement utilise `http://10.0.2.2:8080` par défaut. Pour une compilation personnalisée, définissez `MELODISCAN_API_URL`, `MELODISCAN_API_KEY` et `MELODISCAN_ROOT_CA_BASE64` avec `--dart-define`.
+
+L’endpoint `POST /api/v1/scan` accepte une seule image PNG, JPEG ou WebP, jusqu’à 20 Mio par défaut. Chaque image doit être envoyée dans une tâche séparée.
 
 ---
 
@@ -114,12 +136,8 @@ Accédez ensuite au **Dashboard Web d'Administration Local** :
 Pour mettre à jour le système vers la dernière version du dépôt officiel :
 
 ```bash
-# Relancer simplement le script d'installation auto-update
-./install.sh
-
-# Ou manuellement via Docker :
 git pull origin main
-docker compose up -d --build
+./install.sh
 ```
 
 ---
@@ -137,8 +155,8 @@ flutter build apk --release
 
 Le fichier compilé est généré dans `mobile/build/app/outputs/flutter-apk/app-release.apk` (taille ~48 Mo).
 
-Le serveur MelodiScan héberge également ce fichier en téléchargement direct à l'adresse :
-👉 **`http://localhost:8080/download/app-release.apk`**
+Si l’APK a été compilé et copié dans `data/apk/app-release.apk`, le serveur le propose aussi à l'adresse :
+👉 **`https://<adresse-ip-du-serveur>/download/app-release.apk`**
 
 ### 2. Configuration & Lancement de l'Émulateur Android (AVD)
 Pour tester l'application sur un émulateur Android :
@@ -175,12 +193,11 @@ flutter run
 │              SIGHT / CAPTURE (CLIENT)                   │
 │                                                         │
 │  [ Flutter Mobile Application ]                         │
-│   ├── Edge OpenCV Processing (Binarization Sauvola)    │
-│   ├── Client SoundFont Synthesizer (FluidSynth Engine)  │
-│   └── Interactive Canvas Viewport (Tempo, Transposition)│
+│   ├── Capture ou sélection d’une image                  │
+│   └── Envoi HTTP / suivi SSE / résultat MIDI           │
 └──────────────────────────┬──────────────────────────────┘
                            │
-             Protocoles :  │ HTTP/2 / Multipart (Data)
+             Protocoles :  │ HTTP Multipart (Data)
                            │ SSE (Server-Sent Events)
                            ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -189,12 +206,15 @@ flutter run
 │  [ Docker Container - MelodiScan Engine ]               │
 │   ├── API Gateway (FastAPI + AsyncIO + Pydantic v2)    │
 │   ├── Task Queue (Celery / Redis)                       │
-│   ├── OMR Pipeline Layer                                │
-│   │    ├── Primary: Audiveris CLI Engine (Headless JVM) │
-│   │    └── Fallback: HOMR Deep Learning Pipeline        │
-│   ├── Structural Music Engine (Partitura Pipeline)      │
-│   └── Dashboard Web & Serveur d'APK Mobile              │
+│   ├── OMR : Audiveris CLI (seul moteur, inclus dans l’image)│
+│   ├── Conversion : Partitura vers MIDI                  │
+│   └── Dashboard Web & APK (si artefact présent)          │
 └─────────────────────────────────────────────────────────┘
+                           ▲
+                           │ HTTPS, CA locale approuvée
+                    ┌──────┴──────┐
+                    │ Caddy proxy │
+                    └─────────────┘
 ```
 
 ---
@@ -203,7 +223,7 @@ flutter run
 
 #### Tests Backend (pytest) :
 ```bash
-/app/venv/bin/python3 -m pytest backend/tests/test_main.py
+python -m pytest backend/tests/test_main.py
 ```
 
 #### Tests Frontend Mobile (flutter test) :

@@ -1,6 +1,8 @@
 # 🎵 Spécifications Techniques & Cahier des Charges
 ## **MelodiScan Enterprise & Self-Hosted Open-Source Ecosystem**
 
+> Ce cahier des charges décrit les objectifs du produit, pas toutes les capacités livrées. Le client actuel envoie une seule image et ne fournit ni prétraitement d’image ni lecture audio intégrée. Le serveur repose sur Audiveris comme unique moteur OMR ; si Audiveris ou la conversion échoue, la tâche est marquée en échec et aucune partition de remplacement n’est générée.
+
 ---
 
 ## 1. Vision du Projet & Architecture Globale
@@ -17,12 +19,10 @@ Le système s'articule autour d'une architecture **Edge-Server / Client Mobile**
 │              SIGHT / CAPTURE (CLIENT)                   │
 │                                                         │
 │  [ Flutter Mobile Application ]                         │
-│   ├── Edge OpenCV Processing (Binarization & Perspective)│
-│   ├── Client SoundFont Synthesizer (FluidSynth Engine)  │
-│   └── Interactive Canvas Viewport (Tempo, Transposition)│
+│   └── Capture, envoi d’image, suivi SSE et MIDI         │
 └──────────────────────────┬──────────────────────────────┘
                            │
-             Protocoles :  │ HTTP/2 / gRPC (Data)
+             Protocoles :  │ HTTP Multipart (Data)
                            │ SSE (Server-Sent Events)
                            ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -32,8 +32,7 @@ Le système s'articule autour d'une architecture **Edge-Server / Client Mobile**
 │   ├── API Gateway (FastAPI + AsyncIO + Pydantic v2)    │
 │   ├── Task Queue (Celery / Redis / RabbitMQ)            │
 │   ├── OMR Pipeline Layer                                │
-│   │    ├── Primary: Audiveris CLI Engine (Headless JVM) │
-│   │    └── Fallback: Homr Deep Learning Pipeline        │
+│   │    └── Audiveris CLI (unique moteur, sans secours) │
 │   ├── Structural Music Engine (Partitura Pipeline)      │
 │   └── Cache Layer (Redis / Vector Metadata)             │
 └─────────────────────────────────────────────────────────┘
@@ -75,23 +74,26 @@ Le serveur doit pouvoir tourner sous forme de conteneurs **Docker Orchestrés (D
 
 ### 3.2 Framework API & Traitement Asynchrone
 * **API Core :** FastAPI (Python 3.11+) s'appuyant sur Uvicorn/Gunicorn.
-* **Gestion des Tâches Asynchrones :** Celery adossé à un courtier Redis. Les fichiers volumineux ou les analyses multi-pages sont traitées en arrière-plan sans bloquer les requêtes réseau.
+* **Gestion des Tâches Asynchrones :** Celery adossé à un courtier Redis. Une image par tâche est traitée en arrière-plan sans bloquer les requêtes réseau.
 * **Streaming d'État (Server-Sent Events) :** Publication en temps réel des événements de traitement :
+  * `STATUS_QUEUED`
   * `STATUS_PROCESSING_IMAGE`
   * `STATUS_RUNNING_OMR`
   * `STATUS_BUILDING_MUSICXML`
   * `STATUS_EXPORTING_MIDI`
   * `STATUS_COMPLETED`
+  * `STATUS_FAILED` avec un message d’erreur exploitable
 
 ### 3.3 Moteur de Reconnaissance Optique (OMR Pipeline)
-Le serveur implémente un système d'OMR tolérant aux pannes (*Failover Architecture*) :
-1. **Moteur Principal (Audiveris Headless) :**
+Le serveur s’appuie sur un seul moteur OMR : une défaillance remonte à l’utilisateur, sans résultat de substitution.
+1. **Moteur OMR (Audiveris Headless) :**
    * Exécution d'Audiveris v5.3+ dans un environnement Java 17 headless isolé.
    * Extraction des symboles complexes, portées, altérations, armatures et métriques.
    * Génération d'un fichier intermédiaire `.musicxml`.
-2. **Moteur Secondaire de Secours (`homr` Engine) :**
-   * Si le score de confiance d'Audiveris est $< 70\%$, basculement automatique sur le pipeline de Deep Learning `homr`.
-3. **Optimisation d'Empreinte Mémoire :** Gestion dynamique du cycle de vie du JVM pour libérer la RAM ($< 512$ Mo au repos) lorsque aucune requête n'est active.
+2. **Erreur explicite :**
+   * Si Audiveris est absent, échoue, dépasse son délai maximal ou ne produit pas de MusicXML exploitable, la tâche passe à `STATUS_FAILED`.
+   * Si Partitura échoue ou ne génère pas de MIDI valide, la tâche passe à `STATUS_FAILED`.
+3. **Optimisation d'Empreinte Mémoire :** Gestion dynamique du cycle de vie du JVM lorsque aucune requête n'est active.
 
 ### 3.4 Pipeline de Traitement Musical (`partitura` Core)
 Le fichier `.musicxml` généré est injecté dans le module Python `partitura` pour :
@@ -149,10 +151,11 @@ services:
       - "8080:8080"
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
-      - OMR_ENGINE_PRIMARY=audiveris
-      - OMR_ENGINE_FALLBACK=homr
+      - AUDIVERIS_EXECUTABLE=audiveris
+      - MAX_UPLOAD_BYTES=20971520
+      - CORS_ALLOW_ORIGINS=
     volumes:
-      - ./data/temp:/app/temp
+      - ./data/temp:/app/data/temp
     depends_on:
       - melodiscan-redis
 
@@ -163,8 +166,9 @@ services:
     restart: always
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
+      - AUDIVERIS_EXECUTABLE=audiveris
     volumes:
-      - ./data/temp:/app/temp
+      - ./data/temp:/app/data/temp
     depends_on:
       - melodiscan-redis
 

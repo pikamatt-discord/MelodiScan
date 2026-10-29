@@ -1,27 +1,64 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:melodiscan_mobile/screens/status_screen.dart';
 
 void main() {
-  testWidgets('StatusScreen displays SSE pipeline progress stages', (WidgetTester tester) async {
+  testWidgets(
+      'StatusScreen opens the player only after the server reports completion',
+      (tester) async {
+    final client = MockClient((_) async => http.Response(
+          'data: {"task_id":"task-1","status":"STATUS_COMPLETED","progress":1.0}\n\n',
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        ));
+
     await tester.pumpWidget(
-      const ProviderScope(
+      ProviderScope(
         child: MaterialApp(
           home: StatusScreen(
-            taskId: 'test_task_123',
+            taskId: 'task-1',
             title: 'Test Symphony',
             serverUrl: 'http://localhost:8080',
+            httpClient: client,
           ),
         ),
       ),
     );
+    await tester.pumpAndSettle();
 
     expect(find.text('Traitement : Test Symphony'), findsOneWidget);
-    expect(find.text('Prétraitement d\'image & Binarisation Sauvola'), findsOneWidget);
+    expect(find.text('TERMINÉ'), findsOneWidget);
+    expect(find.text('Voir le résultat MIDI'), findsOneWidget);
+  });
 
-    await tester.pumpAndSettle(const Duration(seconds: 3));
+  testWidgets(
+      'StatusScreen displays server processing errors without simulating completion',
+      (tester) async {
+    final client = MockClient((_) async => http.Response(
+          'data: {"task_id":"task-2","status":"STATUS_FAILED","error":"Audiveris unavailable"}\n\n',
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        ));
 
-    expect(find.text('Ouvrir le Player & Inspecteur'), findsOneWidget);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: StatusScreen(
+            taskId: 'task-2',
+            title: 'Failed Scan',
+            serverUrl: 'http://localhost:8080',
+            httpClient: client,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Audiveris unavailable'), findsOneWidget);
+    expect(find.text('ÉCHEC'), findsOneWidget);
+    expect(find.text('Voir le résultat MIDI'), findsNothing);
   });
 }

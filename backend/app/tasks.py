@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timezone
 from celery import Celery
 from app.omr_engine import OMREngine, convert_musicxml_to_midi
 
@@ -19,36 +20,51 @@ def process_omr_task(task_id: str, image_path: str, title: str) -> dict:
 
     output_dir = "data/temp"
     os.makedirs(output_dir, exist_ok=True)
-    
+
     state = get_task_state(task_id) or {"task_id": task_id, "title": title}
+    if state.get("status") == "STATUS_FAILED":
+        return state
 
-    # 1. Processing image / running OMR
-    state["status"] = "STATUS_RUNNING_OMR"
-    set_task_state(task_id, state)
+    try:
+        state["status"] = "STATUS_PROCESSING_IMAGE"
+        set_task_state(task_id, state)
 
-    engine = OMREngine()
-    musicxml_path, confidence = engine.process_image(image_path, output_dir)
+        state["status"] = "STATUS_RUNNING_OMR"
+        set_task_state(task_id, state)
+        musicxml_path = OMREngine(
+            executable=os.getenv("AUDIVERIS_EXECUTABLE", "audiveris")
+        ).process_image(image_path, output_dir)
 
-    # 2. Building MusicXML
-    state["status"] = "STATUS_BUILDING_MUSICXML"
-    set_task_state(task_id, state)
+        state["status"] = "STATUS_BUILDING_MUSICXML"
+        set_task_state(task_id, state)
 
-    # 3. Exporting MIDI via Partitura
-    state["status"] = "STATUS_EXPORTING_MIDI"
-    set_task_state(task_id, state)
+        state["status"] = "STATUS_EXPORTING_MIDI"
+        set_task_state(task_id, state)
+        midi_path = os.path.join(output_dir, f"{task_id}.mid")
+        convert_musicxml_to_midi(musicxml_path, midi_path)
 
-    midi_path = os.path.join(output_dir, f"{task_id}.mid")
-    convert_musicxml_to_midi(musicxml_path, midi_path)
-
-    # 4. Completed
-    state["status"] = "STATUS_COMPLETED"
-    state["midi_path"] = midi_path
-    set_task_state(task_id, state)
-
-    return {
-        "task_id": task_id,
-        "status": "STATUS_COMPLETED",
-        "musicxml_path": musicxml_path,
-        "midi_path": midi_path,
-        "confidence": confidence
-    }
+        state.update({
+            "status": "STATUS_COMPLETED",
+            "musicxml_path": musicxml_path,
+            "midi_path": midi_path,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "error": None,
+        })
+        set_task_state(task_id, state)
+        return state
+    except Exception as exc:
+        logger.exception("OMR task %s failed.", task_id)
+        state.update({
+            "status": "STATUS_FAILED",
+            "error": str(exc)[:1000],
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        set_task_state(task_id, state)
+        raise
+    finally:
+        try:
+            os.remove(image_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.exception("Could not remove uploaded image for task %s.", task_id)

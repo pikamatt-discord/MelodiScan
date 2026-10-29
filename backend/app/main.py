@@ -1,10 +1,16 @@
 import os
 import json
-import time
 import asyncio
+import base64
+import binascii
+import hmac
+import logging
+import shutil
+import statistics
+from datetime import datetime, timezone
 from typing import Dict, Any, AsyncGenerator
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
+from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import redis
@@ -15,25 +21,85 @@ app = FastAPI(
     description="API for OMR score digitization and music processing"
 )
 
+logger = logging.getLogger(__name__)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+AUDIVERIS_EXECUTABLE = os.getenv("AUDIVERIS_EXECUTABLE", "audiveris")
+API_KEY = os.getenv("API_KEY", "")
+DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 20 * 1024 * 1024))
+TASK_TIMEOUT_SECONDS = int(os.getenv("TASK_TIMEOUT_SECONDS", 600))
+CORS_ALLOW_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if bool(DASHBOARD_USERNAME) != bool(DASHBOARD_PASSWORD):
+    raise RuntimeError("DASHBOARD_USERNAME and DASHBOARD_PASSWORD must both be configured.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+@app.middleware("http")
+async def authenticate_request(request: Request, call_next):
+    path = request.url.path
+    if request.method != "OPTIONS" and (path.startswith("/api/") or path.startswith("/download/")):
+        provided_key = request.headers.get("X-API-Key", "")
+        if API_KEY and not hmac.compare_digest(provided_key, API_KEY) and not _has_dashboard_credentials(
+            request.headers.get("Authorization", "")
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "A valid API key is required."},
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+
+    if path in {"/", "/dashboard"} and DASHBOARD_USERNAME and not _has_dashboard_credentials(
+        request.headers.get("Authorization", "")
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Dashboard credentials are required."},
+            headers={"WWW-Authenticate": 'Basic realm="MelodiScan Dashboard"'},
+        )
+
+    return await call_next(request)
+
+
+def _has_dashboard_credentials(authorization: str) -> bool:
+    if not DASHBOARD_USERNAME:
+        return False
+    try:
+        scheme, encoded_credentials = authorization.split(" ", 1)
+        credentials = base64.b64decode(encoded_credentials, validate=True).decode("utf-8")
+        username, password = credentials.split(":", 1)
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return False
+    return (
+        scheme.lower() == "basic"
+        and hmac.compare_digest(username, DASHBOARD_USERNAME)
+        and hmac.compare_digest(password, DASHBOARD_PASSWORD)
+    )
+
 
 def get_redis_client():
     try:
         client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
         client.ping()
         return client
-    except Exception:
+    except redis.RedisError:
+        logger.warning("Redis is unavailable; task state will not be shared with workers.")
         return None
 
+
 LOCAL_TASKS_DB: Dict[str, Dict[str, Any]] = {}
+
 
 def set_task_state(task_id: str, data: dict):
     r = get_redis_client()
@@ -57,43 +123,96 @@ def get_all_tasks() -> list:
     if r:
         task_ids = r.smembers("task_ids")
         for tid in task_ids:
-            t = get_task_state(tid)
-            if t:
-                tasks.append(t)
+            value = r.get(f"task:{tid}")
+            if value:
+                task = json.loads(value)
+                tasks.append(task)
     else:
         tasks = list(LOCAL_TASKS_DB.values())
-    return tasks
+    return sorted(tasks, key=lambda task: task.get("created_at", ""))
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
 
 class ScanResponse(BaseModel):
     task_id: str
     status: str
     message: str
 
+
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "MelodiScan Engine"}
+    redis_online = get_redis_client() is not None
+    audiveris_available = shutil.which(AUDIVERIS_EXECUTABLE) is not None
+    worker_online = False
+    if redis_online:
+        try:
+            from app.tasks import celery_app
+
+            worker_online = bool(await asyncio.to_thread(celery_app.control.ping, timeout=1))
+        except Exception:
+            logger.exception("Could not check Celery worker health.")
+
+    dependencies = {
+        "redis": redis_online,
+        "celery_worker": worker_online,
+        "audiveris": audiveris_available,
+    }
+    status = "ok" if all(dependencies.values()) else "degraded"
+    return JSONResponse(
+        status_code=200 if status == "ok" else 503,
+        content={
+            "status": status,
+            "service": "MelodiScan Engine",
+            "dependencies": dependencies,
+        },
+    )
+
 
 @app.get("/api/v1/stats")
 async def get_system_stats():
     tasks = get_all_tasks()
     total_scans = len(tasks)
     completed_scans = sum(1 for t in tasks if t.get("status") == "STATUS_COMPLETED")
-    running_scans = sum(1 for t in tasks if t.get("status") not in ["STATUS_COMPLETED", "STATUS_FAILED"])
-    success_rate = (completed_scans / total_scans * 100) if total_scans > 0 else 100.0
+    failed_scans = sum(1 for t in tasks if t.get("status") == "STATUS_FAILED")
+    running_scans = sum(
+        1 for t in tasks
+        if t.get("status") in {
+            "STATUS_QUEUED",
+            "STATUS_PROCESSING_IMAGE",
+            "STATUS_RUNNING_OMR",
+            "STATUS_BUILDING_MUSICXML",
+            "STATUS_EXPORTING_MIDI",
+        }
+    )
+    success_rate = (completed_scans / total_scans * 100) if total_scans else 0.0
+    durations = []
+    for task in tasks:
+        started = _parse_timestamp(task.get("created_at"))
+        completed = _parse_timestamp(task.get("completed_at"))
+        if started and completed and completed >= started:
+            durations.append((completed - started).total_seconds())
 
-    r = get_redis_client()
-    redis_online = r is not None
+    redis_online = get_redis_client() is not None
 
     return {
         "total_scans": total_scans,
         "completed_scans": completed_scans,
+        "failed_scans": failed_scans,
         "running_scans": running_scans,
         "success_rate": round(success_rate, 1),
-        "avg_processing_time_sec": 4.2 if total_scans > 0 else 0.0,
+        "avg_processing_time_sec": round(statistics.mean(durations), 2) if durations else None,
         "redis_online": redis_online,
-        "primary_omr_engine": "Audiveris v5.3 (JVM 17)",
-        "fallback_omr_engine": "HOMR Deep Learning",
-        "recent_tasks": tasks[-5:] if tasks else []
+        "primary_omr_engine": "Audiveris v5.10.0",
+        "recent_tasks": tasks[-5:] if tasks else [],
     }
 
 @app.get("/", response_class=HTMLResponse)
@@ -267,31 +386,19 @@ async def dashboard():
             <div class="card">
                 <div class="metric-title">Taux de Succès</div>
                 <div class="metric-value" style="color: #00F2FE;" id="stat-rate">100%</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Failover Audiveris / HOMR</div>
+                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Traitements terminés sans erreur</div>
             </div>
 
             <div class="card">
                 <div class="metric-title">Temps Moyen Traitement</div>
-                <div class="metric-value" style="color: var(--primary);" id="stat-time">4.2s</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Inférence & Exécution Partitura</div>
+                <div class="metric-value" style="color: var(--primary);" id="stat-time">—</div>
+                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Mesuré depuis les tâches terminées</div>
             </div>
 
             <div class="card">
-                <div class="metric-title">Worker Celery / Redis</div>
-                <div class="metric-value" style="color: #06D6A0;" id="stat-redis">Actif</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Async Queue & Event Bus</div>
-            </div>
-        </div>
-
-        <div class="card" style="margin-bottom: 32px;">
-            <h2>📱 Compilation & Téléchargement Mobile APK</h2>
-            <p style="color: var(--text-muted);">
-                L'application mobile Flutter est pré-compilée en paquet Android Release APK et disponible au téléchargement direct :
-            </p>
-            <div style="margin-top: 18px;">
-                <a href="/download/app-release.apk" class="btn">
-                    <span>⬇️ Télécharger MelodiScan APK (app-release.apk)</span>
-                </a>
+                <div class="metric-title">Redis</div>
+                <div class="metric-value" style="color: #06D6A0;" id="stat-redis">Vérification...</div>
+                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Stockage des tâches</div>
             </div>
         </div>
 
@@ -319,22 +426,28 @@ async def dashboard():
         async function fetchStats() {
             try {
                 const res = await fetch('/api/v1/stats');
-                if (!res.ok) return;
+                if (!res.ok) throw new Error('Impossible de charger les statistiques.');
                 const data = await res.json();
 
                 document.getElementById('stat-total').innerText = data.total_scans;
                 document.getElementById('stat-rate').innerText = data.success_rate + '%';
-                document.getElementById('stat-time').innerText = data.avg_processing_time_sec + 's';
-                document.getElementById('stat-redis').innerText = data.redis_online ? 'En Ligne' : 'Local In-Mem';
+                document.getElementById('stat-time').innerText =
+                    data.avg_processing_time_sec == null ? '—' : data.avg_processing_time_sec + 's';
+                document.getElementById('stat-redis').innerText = data.redis_online ? 'En ligne' : 'Indisponible';
 
                 const tbody = document.getElementById('tasks-table-body');
                 if (data.recent_tasks && data.recent_tasks.length > 0) {
+                    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
+                        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                    })[character]);
                     tbody.innerHTML = data.recent_tasks.map(t => `
                         <tr>
-                            <td><code>${t.task_id.substring(0, 12)}...</code></td>
-                            <td><strong>${t.title || 'Untitled'}</strong></td>
-                            <td><span class="badge">${t.status}</span></td>
-                            <td><a href="/api/v1/result/${t.task_id}" style="color: #00F2FE;">🎵 Télécharger MIDI</a></td>
+                            <td><code>${escapeHtml((t.task_id || '').substring(0, 12))}...</code></td>
+                            <td><strong>${escapeHtml(t.title || 'Untitled')}</strong></td>
+                            <td><span class="badge">${escapeHtml(t.status)}</span>${t.error ? `<div>${escapeHtml(t.error)}</div>` : ''}</td>
+                            <td>${t.status === 'STATUS_COMPLETED'
+                                ? `<a href="/api/v1/result/${encodeURIComponent(t.task_id)}" style="color: #00F2FE;">Télécharger MIDI</a>`
+                                : '—'}</td>
                         </tr>
                     `).join('');
                 } else {
@@ -345,8 +458,21 @@ async def dashboard():
             }
         }
 
+        async function fetchHealth() {
+            const badge = document.getElementById('server-badge');
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                badge.innerText = data.status === 'ok' ? '● SERVICES DISPONIBLES' : '● SERVICE DÉGRADÉ';
+            } catch (_) {
+                badge.innerText = '● SERVEUR INDISPONIBLE';
+            }
+        }
+
         fetchStats();
+        fetchHealth();
         setInterval(fetchStats, 3000);
+        setInterval(fetchHealth, 5000);
     </script>
 </body>
 </html>"""
@@ -360,9 +486,7 @@ async def download_apk():
         if os.path.exists(compiled_apk):
             apk_path = compiled_apk
         else:
-            os.makedirs("data/apk", exist_ok=True)
-            with open(apk_path, "wb") as f:
-                f.write(b"MelodiScan Flutter APK Release Package")
+            raise HTTPException(status_code=404, detail="No release APK is available on this server.")
 
     return FileResponse(
         apk_path,
@@ -373,117 +497,151 @@ async def download_apk():
 @app.post("/api/v1/scan", response_model=ScanResponse)
 async def scan_score(
     file: UploadFile = File(...),
-    title: str = Form("Untitled Score")
+    title: str = Form("Untitled Score", max_length=200)
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
-    
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    await file.close()
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded image is empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Image exceeds the {MAX_UPLOAD_BYTES}-byte upload limit.")
+
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        extension = ".png"
+    elif content.startswith(b"\xff\xd8\xff"):
+        extension = ".jpg"
+    elif len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        extension = ".webp"
+    else:
+        raise HTTPException(status_code=415, detail="Only valid PNG, JPEG, or WebP images are supported.")
+
     import uuid
     task_id = str(uuid.uuid4())
-    
     os.makedirs("data/temp", exist_ok=True)
-    temp_file_path = os.path.join("data/temp", f"{task_id}_{file.filename}")
-    
-    content = await file.read()
+    temp_file_path = os.path.join("data/temp", f"{task_id}{extension}")
+
     with open(temp_file_path, "wb") as f:
         f.write(content)
-        
+
+    now = datetime.now(timezone.utc).isoformat()
     task_info = {
         "task_id": task_id,
-        "title": title,
-        "status": "STATUS_PROCESSING_IMAGE",
+        "title": title.strip() or "Untitled Score",
+        "status": "STATUS_QUEUED",
+        "created_at": now,
         "file_path": temp_file_path,
-        "events": [
-            "STATUS_PROCESSING_IMAGE",
-            "STATUS_RUNNING_OMR",
-            "STATUS_BUILDING_MUSICXML",
-            "STATUS_EXPORTING_MIDI",
-            "STATUS_COMPLETED"
-        ],
-        "current_event_idx": 0,
         "midi_path": None
     }
     set_task_state(task_id, task_info)
-    
+
     try:
         from app.tasks import process_omr_task
         process_omr_task.delay(task_id, temp_file_path, title)
-    except Exception:
-        # Local background thread execution if Celery worker is offline
-        def run_local_omr():
-            from app.omr_engine import OMREngine, convert_musicxml_to_midi
-            task_info["status"] = "STATUS_RUNNING_OMR"
-            set_task_state(task_id, task_info)
-            time.sleep(0.5)
-
-            engine = OMREngine()
-            xml_path, conf = engine.process_image(temp_file_path, "data/temp")
-
-            task_info["status"] = "STATUS_BUILDING_MUSICXML"
-            set_task_state(task_id, task_info)
-            time.sleep(0.5)
-
-            task_info["status"] = "STATUS_EXPORTING_MIDI"
-            set_task_state(task_id, task_info)
-            time.sleep(0.5)
-
-            midi_path = os.path.join("data/temp", f"{task_id}.mid")
-            convert_musicxml_to_midi(xml_path, midi_path)
-
-            task_info["status"] = "STATUS_COMPLETED"
-            task_info["midi_path"] = midi_path
-            set_task_state(task_id, task_info)
-
-        import threading
-        threading.Thread(target=run_local_omr, daemon=True).start()
+    except Exception as exc:
+        logger.exception("Could not enqueue scan task %s.", task_id)
+        task_info.update({
+            "status": "STATUS_FAILED",
+            "error": f"Could not queue image processing: {exc}",
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        set_task_state(task_id, task_info)
+        try:
+            os.remove(temp_file_path)
+        except OSError:
+            logger.exception("Could not remove rejected upload for task %s.", task_id)
+        raise HTTPException(status_code=503, detail="Image processing service is unavailable.") from exc
 
     return ScanResponse(
         task_id=task_id,
-        status="STATUS_PROCESSING_IMAGE",
+        status="STATUS_QUEUED",
         message="Score scan request received successfully"
     )
 
+
 @app.get("/api/v1/stream/{task_id}")
 async def stream_task_status(task_id: str):
-    async def event_generator() -> AsyncGenerator[str, None]:
-        max_retries = 30
-        last_status = None
+    if not get_task_state(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
 
-        for _ in range(max_retries):
+    async def event_generator() -> AsyncGenerator[str, None]:
+        last_status = None
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        last_heartbeat = started
+        progress_by_status = {
+            "STATUS_QUEUED": 0.0,
+            "STATUS_PROCESSING_IMAGE": 0.1,
+            "STATUS_RUNNING_OMR": 0.4,
+            "STATUS_BUILDING_MUSICXML": 0.65,
+            "STATUS_EXPORTING_MIDI": 0.85,
+            "STATUS_COMPLETED": 1.0,
+        }
+
+        while True:
             task_info = get_task_state(task_id)
-            current_status = task_info.get("status", "STATUS_PROCESSING_IMAGE") if task_info else "STATUS_PROCESSING_IMAGE"
+            if not task_info:
+                task_info = {
+                    "status": "STATUS_FAILED",
+                    "error": "Task state is no longer available.",
+                }
+            current_status = task_info.get("status", "STATUS_QUEUED")
 
             if current_status != last_status:
                 last_status = current_status
                 data = json.dumps({
                     "task_id": task_id,
                     "status": current_status,
-                    "progress": 1.0 if current_status == "STATUS_COMPLETED" else 0.5
+                    "progress": progress_by_status.get(current_status, 0.0),
+                    "error": task_info.get("error"),
                 })
                 yield f"data: {data}\n\n"
 
-            if current_status == "STATUS_COMPLETED":
+            if current_status in {"STATUS_COMPLETED", "STATUS_FAILED"}:
                 break
 
+            now = loop.time()
+            if now - started >= TASK_TIMEOUT_SECONDS:
+                task_info.update({
+                    "status": "STATUS_FAILED",
+                    "error": f"Image processing timed out after {TASK_TIMEOUT_SECONDS} seconds.",
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
+                })
+                set_task_state(task_id, task_info)
+                data = json.dumps({
+                    "task_id": task_id,
+                    "status": "STATUS_FAILED",
+                    "progress": 0.0,
+                    "error": task_info["error"],
+                })
+                yield f"data: {data}\n\n"
+                break
+
+            if now - last_heartbeat >= 15:
+                yield ": keep-alive\n\n"
+                last_heartbeat = now
             await asyncio.sleep(0.4)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @app.get("/api/v1/result/{task_id}")
 async def get_task_result(task_id: str):
     task_info = get_task_state(task_id)
     if not task_info:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
+    if task_info.get("status") == "STATUS_FAILED":
+        raise HTTPException(status_code=422, detail=task_info.get("error", "Image processing failed."))
+    if task_info.get("status") != "STATUS_COMPLETED":
+        raise HTTPException(status_code=409, detail="Image processing has not completed.")
+
     midi_path = task_info.get("midi_path")
-    
-    if not midi_path or not os.path.exists(midi_path):
-        os.makedirs("data/temp", exist_ok=True)
-        midi_path = os.path.join("data/temp", f"{task_id}.mid")
-        if not os.path.exists(midi_path):
-            from app.omr_engine import _create_valid_midi_binary
-            _create_valid_midi_binary(midi_path)
-    
+    if not midi_path or not os.path.isfile(midi_path) or os.path.getsize(midi_path) == 0:
+        raise HTTPException(status_code=500, detail="Completed task has no valid MIDI result.")
+
     return FileResponse(
         midi_path,
         media_type="audio/midi",

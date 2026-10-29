@@ -7,13 +7,18 @@ services:
     container_name: melodiscan_api
     restart: always
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
-      - OMR_ENGINE_PRIMARY=audiveris
-      - OMR_ENGINE_FALLBACK=homr
+      - AUDIVERIS_EXECUTABLE=${AUDIVERIS_EXECUTABLE:-audiveris}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-20971520}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
+      - API_KEY=${API_KEY:-}
+      - DASHBOARD_USERNAME=${DASHBOARD_USERNAME:-}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
     volumes:
       - ./data/temp:/app/data/temp
+      - ./data/apk:/app/data/apk:ro
     depends_on:
       - melodiscan-redis
 
@@ -27,6 +32,7 @@ services:
     restart: always
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
+      - AUDIVERIS_EXECUTABLE=${AUDIVERIS_EXECUTABLE:-audiveris}
     volumes:
       - ./data/temp:/app/data/temp
     depends_on:
@@ -36,3 +42,34 @@ services:
     image: redis:7-alpine
     container_name: melodiscan_redis
     restart: always
+
+  melodiscan-https:
+    image: caddy:2-alpine
+    container_name: melodiscan_https
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - MELODISCAN_HOST=${MELODISCAN_HOST:-melodiscan.home.arpa}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - melodiscan-api
+
+  melodiscan-test-runner:
+    profiles:
+      - test
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: melodiscan/core-engine:latest
+    entrypoint: ["python", "-m", "pytest", "-q", "/app/tests"]
+    volumes:
+      - ./backend/tests:/app/tests:ro
+
+volumes:
+  caddy_data:
+  caddy_config:
