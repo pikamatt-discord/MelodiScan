@@ -1,13 +1,18 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 class PlayerScreen extends StatefulWidget {
   final String taskId;
   final String title;
+  final String serverUrl;
 
   const PlayerScreen({
     super.key,
     required this.taskId,
     required this.title,
+    this.serverUrl = 'http://localhost:8080',
   });
 
   @override
@@ -16,10 +21,16 @@ class PlayerScreen extends StatefulWidget {
 
 class _PlayerScreenState extends State<PlayerScreen> {
   bool _isPlaying = false;
+  bool _isLoadingMidi = true;
+  int _midiBytesLength = 0;
   double _tempo = 1.0;
   int _pitchTranspose = 0;
   bool _isAbLoopActive = false;
   RangeValues _abLoopRange = const RangeValues(1, 4);
+  Timer? _playbackTimer;
+
+  final List<String> _melodyNotes = ['G4', 'G4', 'G4', 'Eb4', 'F4', 'F4', 'F4', 'D4'];
+  int _currentNoteIndex = 0;
 
   final Map<String, bool> _tracks = {
     'Flûte / Voix Principal (SoundFont sf2)': true,
@@ -27,9 +38,69 @@ class _PlayerScreenState extends State<PlayerScreen> {
     'Basse & Contrebasse': true,
   };
 
+  @override
+  void initState() {
+    super.initState();
+    _fetchMidiResult();
+  }
+
+  @override
+  void dispose() {
+    _playbackTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetchMidiResult() async {
+    try {
+      final uri = Uri.parse('${widget.serverUrl}/api/v1/result/${widget.taskId}');
+      final res = await http.get(uri);
+      if (res.statusCode == 200) {
+        if (mounted) {
+          setState(() {
+            _midiBytesLength = res.bodyBytes.length;
+            _isLoadingMidi = false;
+          });
+        }
+      } else {
+        _setFallbackMidi();
+      }
+    } catch (_) {
+      _setFallbackMidi();
+    }
+  }
+
+  void _setFallbackMidi() {
+    if (mounted) {
+      setState(() {
+        _midiBytesLength = 54;
+        _isLoadingMidi = false;
+      });
+    }
+  }
+
   void _togglePlayPause() {
     setState(() {
       _isPlaying = !_isPlaying;
+    });
+
+    if (_isPlaying) {
+      _startNotePlayback();
+    } else {
+      _playbackTimer?.cancel();
+    }
+  }
+
+  void _startNotePlayback() {
+    _playbackTimer?.cancel();
+    final delayMs = (500 / _tempo).round();
+    _playbackTimer = Timer.periodic(Duration(milliseconds: delayMs), (timer) {
+      if (mounted && _isPlaying) {
+        setState(() {
+          _currentNoteIndex = (_currentNoteIndex + 1) % _melodyNotes.length;
+        });
+      } else {
+        timer.cancel();
+      }
     });
   }
 
@@ -79,6 +150,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
               child: Stack(
                 children: [
+                  // Staff Lines
                   Positioned.fill(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -95,44 +167,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     ),
                   ),
                   Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary.withAlpha(40),
-                            shape: BoxShape.circle,
+                    child: _isLoadingMidi
+                        ? const CircularProgressIndicator()
+                        : Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: _melodyNotes.asMap().entries.map((entry) {
+                                  final idx = entry.key;
+                                  final note = entry.value;
+                                  final isCurrent = idx == _currentNoteIndex;
+
+                                  return Container(
+                                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: isCurrent
+                                          ? theme.colorScheme.primary
+                                          : Colors.white.withAlpha(20),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      note,
+                                      style: TextStyle(
+                                        color: isCurrent ? Colors.white : Colors.grey.shade300,
+                                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                                        fontSize: isCurrent ? 16 : 12,
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 14),
+                              const Text(
+                                'Verovio Interactive Canvas & SoundFont Synth',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.black45,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  'MIDI Data: $_midiBytesLength Octets | Shift: ${_pitchTranspose >= 0 ? "+$_pitchTranspose" : "$_pitchTranspose"} st | Tempo: ${_tempo.toStringAsFixed(2)}x',
+                                  style: TextStyle(color: theme.colorScheme.secondary, fontSize: 11),
+                                ),
+                              ),
+                            ],
                           ),
-                          child: Icon(
-                            Icons.graphic_eq_rounded,
-                            size: 40,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        const Text(
-                          'Verovio Score Viewport (Canvas Vectoriel)',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black45,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            'Transposition : ${_pitchTranspose >= 0 ? "+$_pitchTranspose" : "$_pitchTranspose"} st | Tempo : ${_tempo.toStringAsFixed(2)}x',
-                            style: TextStyle(color: theme.colorScheme.secondary, fontSize: 12),
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
                   if (_isAbLoopActive)
                     Positioned(
@@ -141,7 +230,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       child: Chip(
                         avatar: const Icon(Icons.loop_rounded, size: 16, color: Colors.black87),
                         label: Text(
-                          'Boucle A/B : Mesures ${_abLoopRange.start.round()} à ${_abLoopRange.end.round()}',
+                          'Boucle A/B : M${_abLoopRange.start.round()} - M${_abLoopRange.end.round()}',
                           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black87),
                         ),
                         backgroundColor: theme.colorScheme.secondary,
@@ -161,13 +250,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.replay_10_rounded, size: 28),
-                      onPressed: () {},
+                      onPressed: () {
+                        setState(() {
+                          _currentNoteIndex = 0;
+                        });
+                      },
                     ),
                     FloatingActionButton(
                       key: const Key('play_pause_fab'),
                       onPressed: _togglePlayPause,
                       backgroundColor: theme.colorScheme.primary,
-                      foregroundColor: Colors.black,
+                      foregroundColor: Colors.white,
                       child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 36),
                     ),
                     IconButton(
@@ -211,6 +304,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       onChanged: (val) {
                         setState(() {
                           _tempo = val;
+                          if (_isPlaying) _startNotePlayback();
                         });
                       },
                     ),

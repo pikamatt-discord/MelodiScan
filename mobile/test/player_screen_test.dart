@@ -16,13 +16,15 @@ void main() {
       ),
     );
 
+    await tester.pumpAndSettle();
+
     expect(find.text('Symphonie No. 5'), findsOneWidget);
-    expect(find.text('Verovio Score Viewport (Canvas Vectoriel)'), findsOneWidget);
+    expect(find.text('Verovio Interactive Canvas & SoundFont Synth'), findsOneWidget);
     expect(find.text('Tempo (Time-Stretching)'), findsOneWidget);
 
     // Tap play button
     await tester.tap(find.byKey(const Key('play_pause_fab')));
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(find.byIcon(Icons.pause), findsOneWidget);
   });

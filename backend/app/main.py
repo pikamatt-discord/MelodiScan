@@ -257,7 +257,6 @@ async def dashboard():
             <span class="badge" id="server-badge">● SERVEUR CONNECTÉ</span>
         </div>
 
-        <!-- Live KPI Stats Grid -->
         <div class="grid">
             <div class="card">
                 <div class="metric-title">Partitions Numérisées</div>
@@ -410,7 +409,33 @@ async def scan_score(
         from app.tasks import process_omr_task
         process_omr_task.delay(task_id, temp_file_path, title)
     except Exception:
-        pass
+        # Local background thread execution if Celery worker is offline
+        def run_local_omr():
+            from app.omr_engine import OMREngine, convert_musicxml_to_midi
+            task_info["status"] = "STATUS_RUNNING_OMR"
+            set_task_state(task_id, task_info)
+            time.sleep(0.5)
+
+            engine = OMREngine()
+            xml_path, conf = engine.process_image(temp_file_path, "data/temp")
+
+            task_info["status"] = "STATUS_BUILDING_MUSICXML"
+            set_task_state(task_id, task_info)
+            time.sleep(0.5)
+
+            task_info["status"] = "STATUS_EXPORTING_MIDI"
+            set_task_state(task_id, task_info)
+            time.sleep(0.5)
+
+            midi_path = os.path.join("data/temp", f"{task_id}.mid")
+            convert_musicxml_to_midi(xml_path, midi_path)
+
+            task_info["status"] = "STATUS_COMPLETED"
+            task_info["midi_path"] = midi_path
+            set_task_state(task_id, task_info)
+
+        import threading
+        threading.Thread(target=run_local_omr, daemon=True).start()
 
     return ScanResponse(
         task_id=task_id,
@@ -420,42 +445,27 @@ async def scan_score(
 
 @app.get("/api/v1/stream/{task_id}")
 async def stream_task_status(task_id: str):
-    task_info = get_task_state(task_id)
-    if not task_info:
-        task_info = {
-            "task_id": task_id,
-            "title": "Score",
-            "status": "STATUS_PROCESSING_IMAGE",
-            "events": [
-                "STATUS_PROCESSING_IMAGE",
-                "STATUS_RUNNING_OMR",
-                "STATUS_BUILDING_MUSICXML",
-                "STATUS_EXPORTING_MIDI",
-                "STATUS_COMPLETED"
-            ]
-        }
-        set_task_state(task_id, task_info)
-
     async def event_generator() -> AsyncGenerator[str, None]:
-        events = task_info.get("events", [
-            "STATUS_PROCESSING_IMAGE",
-            "STATUS_RUNNING_OMR",
-            "STATUS_BUILDING_MUSICXML",
-            "STATUS_EXPORTING_MIDI",
-            "STATUS_COMPLETED"
-        ])
-        
-        for event_status in events:
-            current = get_task_state(task_id) or task_info
-            current["status"] = event_status
-            set_task_state(task_id, current)
-            data = json.dumps({
-                "task_id": task_id,
-                "status": event_status,
-                "progress": (events.index(event_status) + 1) / len(events)
-            })
-            yield f"data: {data}\n\n"
-            await asyncio.sleep(0.3)
+        max_retries = 30
+        last_status = None
+
+        for _ in range(max_retries):
+            task_info = get_task_state(task_id)
+            current_status = task_info.get("status", "STATUS_PROCESSING_IMAGE") if task_info else "STATUS_PROCESSING_IMAGE"
+
+            if current_status != last_status:
+                last_status = current_status
+                data = json.dumps({
+                    "task_id": task_id,
+                    "status": current_status,
+                    "progress": 1.0 if current_status == "STATUS_COMPLETED" else 0.5
+                })
+                yield f"data: {data}\n\n"
+
+            if current_status == "STATUS_COMPLETED":
+                break
+
+            await asyncio.sleep(0.4)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -471,13 +481,8 @@ async def get_task_result(task_id: str):
         os.makedirs("data/temp", exist_ok=True)
         midi_path = os.path.join("data/temp", f"{task_id}.mid")
         if not os.path.exists(midi_path):
-            with open(midi_path, "wb") as f:
-                f.write(bytes([
-                    0x4D, 0x54, 0x68, 0x64, 0x00, 0x00, 0x00, 0x06,
-                    0x00, 0x00, 0x00, 0x01, 0x00, 0x60, 0x4D, 0x54,
-                    0x72, 0x6B, 0x00, 0x00, 0x00, 0x04, 0x00, 0xFF,
-                    0x2F, 0x00
-                ]))
+            from app.omr_engine import _create_valid_midi_binary
+            _create_valid_midi_binary(midi_path)
     
     return FileResponse(
         midi_path,

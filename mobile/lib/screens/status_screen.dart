@@ -97,6 +97,7 @@ class _StatusScreenState extends State<StatusScreen> {
         builder: (_) => PlayerScreen(
           taskId: widget.taskId,
           title: widget.title,
+          serverUrl: widget.serverUrl,
         ),
       ),
     );

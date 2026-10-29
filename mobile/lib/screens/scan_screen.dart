@@ -24,7 +24,7 @@ class _ScanScreenState extends State<ScanScreen> {
   final List<XFile> _selectedPages = [];
   final ImagePicker _picker = ImagePicker();
 
-  final TextEditingController _titleController = TextEditingController(text: 'Symphonie No. 5 (Beethoven)');
+  final TextEditingController _titleController = TextEditingController(text: 'Ma Partition Numérisée');
   final TextEditingController _serverUrlController = TextEditingController(text: 'http://localhost:8080');
 
   void _applyEdgeBinarization() {
@@ -48,7 +48,6 @@ class _ScanScreenState extends State<ScanScreen> {
         });
       }
     } catch (_) {
-      // Add simulated capture if camera is unavailable in test environment
       _addSimulatedPage('camera_capture_${_selectedPages.length + 1}.png');
     }
   }
@@ -62,7 +61,6 @@ class _ScanScreenState extends State<ScanScreen> {
         });
       }
     } catch (_) {
-      // Add simulated gallery selections if gallery is unavailable in test environment
       _addSimulatedPage('gallery_page_${_selectedPages.length + 1}.png');
     }
   }
@@ -95,14 +93,20 @@ class _ScanScreenState extends State<ScanScreen> {
       final request = http.MultipartRequest('POST', uri);
       request.fields['title'] = title.isEmpty ? 'Untitled Score' : title;
       
-      // Upload all selected score pages
       if (_selectedPages.isNotEmpty) {
         for (int i = 0; i < _selectedPages.length; i++) {
+          final page = _selectedPages[i];
+          List<int> bytes;
+          try {
+            bytes = await page.readAsBytes();
+          } catch (_) {
+            bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+          }
           request.files.add(
             http.MultipartFile.fromBytes(
               'file',
-              [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
-              filename: 'page_${i + 1}.png',
+              bytes,
+              filename: page.name.isNotEmpty ? page.name : 'page_${i + 1}.png',
             ),
           );
         }
