@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Flutter / Dart
+.dart_tool/
+.fvm/
+.idea/
+.packages
+.pub-cache/
+.pub/
+build/
+mobile/.dart_tool/
+mobile/.pub/
+mobile/build/
+mobile/linux/
+mobile/macos/
+mobile/windows/
+mobile/web/
+
+# Temp
+tmp/
+*.tmp
+*.mid
+*.musicxml
