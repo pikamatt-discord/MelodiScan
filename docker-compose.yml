@@ -1,0 +1,38 @@
+services:
+  melodiscan-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: melodiscan/core-engine:latest
+    container_name: melodiscan_api
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_URL=redis://melodiscan-redis:6379/0
+      - OMR_ENGINE_PRIMARY=audiveris
+      - OMR_ENGINE_FALLBACK=homr
+    volumes:
+      - ./data/temp:/app/data/temp
+    depends_on:
+      - melodiscan-redis
+
+  melodiscan-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: melodiscan/core-engine:latest
+    container_name: melodiscan_worker
+    command: celery -A app.tasks worker --loglevel=info
+    restart: always
+    environment:
+      - REDIS_URL=redis://melodiscan-redis:6379/0
+    volumes:
+      - ./data/temp:/app/data/temp
+    depends_on:
+      - melodiscan-redis
+
+  melodiscan-redis:
+    image: redis:7-alpine
+    container_name: melodiscan_redis
+    restart: always

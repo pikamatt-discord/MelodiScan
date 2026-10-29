@@ -1,0 +1,16 @@
+# Virtualenv
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Flutter/Dart
+.dart_tool/
+.fvm/
+build/
+.pub-cache/
+.pub/
+
+# Docker / Temp data
+data/temp/
+*.log
