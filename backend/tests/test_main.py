@@ -684,6 +684,41 @@ def test_result_does_not_invent_missing_midi(tmp_path):
     assert not (tmp_path / "missing.mid").exists()
 
 
+def test_musicxml_result_returns_the_completed_musicxml_file(tmp_path):
+    musicxml_path = tmp_path / "result.musicxml"
+    musicxml_path.write_text("<score-partwise/>", encoding="utf-8")
+    set_task_state("completed-musicxml-task", {
+        "status": "STATUS_COMPLETED",
+        "musicxml_path": str(musicxml_path),
+    })
+
+    response = client.get("/api/v1/result/completed-musicxml-task/musicxml")
+
+    assert response.status_code == 200
+    assert response.content == b"<score-partwise/>"
+    assert response.headers["content-type"].startswith(
+        "application/vnd.recordare.musicxml+xml"
+    )
+
+
+def test_musicxml_result_rejects_missing_or_incomplete_tasks(tmp_path):
+    set_task_state("queued-musicxml-task", {"status": "STATUS_QUEUED"})
+    set_task_state("broken-musicxml-task", {
+        "status": "STATUS_COMPLETED",
+        "musicxml_path": str(tmp_path / "missing.musicxml"),
+    })
+
+    assert client.get(
+        "/api/v1/result/unknown-musicxml-task/musicxml"
+    ).status_code == 404
+    assert client.get(
+        "/api/v1/result/queued-musicxml-task/musicxml"
+    ).status_code == 409
+    assert client.get(
+        "/api/v1/result/broken-musicxml-task/musicxml"
+    ).status_code == 500
+
+
 def test_stats_use_task_timestamps():
     now = datetime.now(timezone.utc)
     set_task_state("successful-task", {

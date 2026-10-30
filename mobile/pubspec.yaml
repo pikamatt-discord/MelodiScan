@@ -13,6 +13,7 @@ dependencies:
     sdk: flutter
   flutter_riverpod: ^2.4.9
   http: ^1.1.2
+  crypto: ^3.0.8
   path_provider: ^2.1.2
   image_picker: ^1.0.7
   cupertino_icons: ^1.0.8
@@ -20,6 +21,7 @@ dependencies:
   flutter_midi_pro: 4.0.4
   pdfx: 2.11.0
   dart_midi_pro: 1.0.4+2
+  xml: ^6.6.1
 
 dev_dependencies:
   flutter_test:
@@ -29,4 +31,4 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/soundfonts/VintageDreamsWaves-v2.sf2
+    - assets/soundfonts/COPYRIGHT.txt

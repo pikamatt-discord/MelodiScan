@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_midi_pro/flutter_midi_pro.dart';
 
+import 'general_midi_soundfont.dart';
+
 abstract interface class MidiPlayback {
   bool get isSupported;
 
@@ -29,9 +31,8 @@ class MidiPlaybackPosition {
 }
 
 class FlutterMidiPlayback implements MidiPlayback {
-  static const _soundfontPath = 'assets/soundfonts/VintageDreamsWaves-v2.sf2';
-
   final MidiPro _midi = MidiPro();
+  final GeneralMidiSoundfont _soundfont = GeneralMidiSoundfont();
   int? _soundfontId;
 
   @override
@@ -48,11 +49,10 @@ class FlutterMidiPlayback implements MidiPlayback {
     }
 
     try {
-      _soundfontId ??= await _midi.loadSoundfontAsset(
-        assetPath: _soundfontPath,
-        bank: 0,
-        program: 0,
-      );
+      if (_soundfontId == null) {
+        final file = await _soundfont.getFile();
+        _soundfontId = await _midi.loadSoundfontFile(filePath: file.path);
+      }
       await _midi.loadMidiData(data: midiBytes, sfId: _soundfontId!);
     } catch (_) {
       if (_soundfontId == null && _midi.isInitialized) {

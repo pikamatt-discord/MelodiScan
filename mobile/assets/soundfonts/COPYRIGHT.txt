@@ -1,14 +1,11 @@
-Vintage Dreams Waves v 2.0 for Creative Labs' AWE Soundcards
-Copyright (c) Ian Wilson, 1996 (Updated January 1998)
+GeneralUser GS
+Copyright (c) S. Christian Collins
 
-This soundfont is freeware. You may freely use and/or redistribute it subject
-to the following terms:
-1. It is not altered, edited, modified, ripped, or converted to other formats,
-   except for private use only.
-2. It is distributed with this copyright notice.
+The upstream project describes GeneralUser GS as freely redistributable.
+This SoundFont is downloaded unchanged at runtime and cached on the device.
+The SoundFont is freeware; it is not distributed under an OSI-approved
+open-source license.
 
-This soundfont is distributed WITHOUT WARRANTY, and without the implied
-warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. No liability
-or damages can be inferred upon the said copyright owner, Ian Wilson.
-
-Source: https://github.com/FluidSynth/fluidsynth/tree/master/sf2
+Upstream project and author: https://github.com/mrbumpy409/GeneralUser-GS
+Official project page: https://www.schristiancollins.com/generaluser
+Download mirror: https://github.com/got-feedBack/feedBack-soundfonts/releases/tag/soundfonts-v1

@@ -51,10 +51,10 @@ Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 
 | Composant | Statut | Fonctionnalités Déployées |
 | :--- | :--- | :--- |
-| **API Backend (FastAPI)** | Prototype | Envoi d’une image ou d’un PDF par tâche, suivi SSE, téléchargement MIDI uniquement après succès, statistiques et état de santé des dépendances. |
+| **API Backend (FastAPI)** | Prototype | Envoi d’une image ou d’un PDF par tâche, suivi SSE, téléchargement MIDI et MusicXML reconnus après succès, statistiques et état de santé des dépendances. |
 | **Moteur OMR** | Intégré à l’image | Audiveris 5.10.0 est installé dans l’image Docker du backend/worker. Toute erreur OMR ou de conversion marque la tâche en échec ; aucun moteur de secours ni partition synthétique. |
 | **Dashboard serveur** | Opérationnel | Statistiques de numérisation, état API/Redis/worker/Audiveris/générateur APK, historique filtrable, téléchargement MIDI et génération réelle d’un APK Release à la demande. |
-| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, suivi SSE, aperçu de la partition, visualiseur piano roll avec clavier, et lecture MIDI sur Android 7+. Le prétraitement d’image n’est pas implémenté. |
+| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, suivi SSE, partition traditionnelle rendue depuis le MusicXML détecté par Audiveris avec défilement synchronisé, vue piano roll en option et lecture MIDI sur Android 7+ avec FluidSynth. La banque GeneralUser GS (GM) est téléchargée et vérifiée au premier lancement de la lecture, puis conservée hors ligne. Le prétraitement d’image n’est pas implémenté. |
 | **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Audiveris. |
 | **Tests automatisés** | En cours | Tests ciblés backend et Flutter ; exécuter les commandes de test ci-dessous dans des environnements munis de leurs dépendances. |
 

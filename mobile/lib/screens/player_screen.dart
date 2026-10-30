@@ -1,22 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:pdfx/pdfx.dart';
 
+import '../models/musicxml_score.dart';
 import '../models/midi_visualization.dart';
 import '../network/api_client.dart';
 import '../services/midi_playback.dart';
+import '../widgets/traditional_score.dart';
 
 class PlayerScreen extends StatefulWidget {
   final String taskId;
   final String title;
   final String serverUrl;
-  final String? sourceFilePath;
-  final bool sourceFileIsPdf;
   final String apiKey;
   final http.Client? httpClient;
   final MidiPlayback? midiPlayback;
@@ -26,8 +24,6 @@ class PlayerScreen extends StatefulWidget {
     required this.taskId,
     required this.title,
     required this.serverUrl,
-    this.sourceFilePath,
-    this.sourceFileIsPdf = false,
     this.apiKey = '',
     this.httpClient,
     this.midiPlayback,
@@ -41,12 +37,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isLoading = true;
   Uint8List? _midiBytes;
   MidiVisualization? _visualization;
+  MusicXmlScore? _score;
   String? _errorMessage;
   String? _playbackError;
   bool _isPreparingPlayback = false;
   bool _isPlaying = false;
   bool _playbackComplete = false;
   bool _hasPreparedPlayback = false;
+  bool _showPianoRoll = false;
   int _currentTick = 0;
   bool _isReadingPosition = false;
   Timer? _positionTimer;
@@ -66,34 +64,51 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _errorMessage = null;
       _midiBytes = null;
       _visualization = null;
+      _score = null;
     });
 
     try {
       final client = widget.httpClient ?? createApiClient();
-      final uri =
+      final midiUri =
           Uri.parse('${widget.serverUrl}/api/v1/result/${widget.taskId}');
-      final response = await client
-          .get(
-            uri,
-            headers:
-                widget.apiKey.isEmpty ? null : {'X-API-Key': widget.apiKey},
-          )
-          .timeout(const Duration(seconds: 20));
-      if (response.statusCode != 200) {
-        throw StateError(_responseError(response));
+      final musicXmlUri = Uri.parse(
+        '${widget.serverUrl}/api/v1/result/${widget.taskId}/musicxml',
+      );
+      final headers =
+          widget.apiKey.isEmpty ? null : {'X-API-Key': widget.apiKey};
+      final responses = await Future.wait([
+        client.get(midiUri, headers: headers).timeout(
+              const Duration(seconds: 20),
+            ),
+        client.get(musicXmlUri, headers: headers).timeout(
+              const Duration(seconds: 20),
+            ),
+      ]);
+      final midiResponse = responses[0];
+      final musicXmlResponse = responses[1];
+      if (midiResponse.statusCode != 200) {
+        throw StateError(_responseError(midiResponse));
+      }
+      if (musicXmlResponse.statusCode != 200) {
+        throw StateError(_responseError(musicXmlResponse));
       }
 
-      final bytes = response.bodyBytes;
+      final bytes = midiResponse.bodyBytes;
       if (!_isMidiFile(bytes)) {
         throw const FormatException(
             'Le serveur n’a pas renvoyé un fichier MIDI valide.');
       }
       final visualization = MidiVisualization.parse(bytes);
+      final score = MusicXmlScore.parse(
+        utf8.decode(musicXmlResponse.bodyBytes),
+        ticksPerBeat: visualization.ticksPerBeat,
+      );
 
       if (mounted) {
         setState(() {
           _midiBytes = bytes;
           _visualization = visualization;
+          _score = score;
           _isLoading = false;
         });
       }
@@ -328,6 +343,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final resultUrl = '${widget.serverUrl}/api/v1/result/${widget.taskId}';
     final playbackSupported = _playback.isSupported;
     final visualization = _visualization!;
+    final score = _score!;
     final pitchRange = _pitchRange(visualization.notes);
     final activePitches = {
       for (final note in visualization.notes)
@@ -335,104 +351,126 @@ class _PlayerScreenState extends State<PlayerScreen> {
           note.pitch,
     };
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isLandscape = constraints.maxWidth > constraints.maxHeight;
-        return Column(
-          children: [
-            Expanded(
-              flex: isLandscape ? 2 : 3,
-              child: _ScorePreview(
-                filePath: widget.sourceFilePath,
-                isPdf: widget.sourceFileIsPdf,
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: SegmentedButton<bool>(
+            key: const Key('player_view_mode'),
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(
+                value: false,
+                icon: Icon(Icons.music_note),
+                label: Text('Partition'),
               ),
-            ),
-            Expanded(
-              flex: isLandscape ? 5 : 5,
-              child: _PianoRoll(
-                notes: visualization.notes,
-                ticksPerBeat: visualization.ticksPerBeat,
-                currentTick: _currentTick,
-                lowPitch: pitchRange.$1,
-                highPitch: pitchRange.$2,
+              ButtonSegment(
+                value: true,
+                icon: Icon(Icons.piano),
+                label: Text('Piano roll'),
               ),
-            ),
-            SizedBox(
-              height: isLandscape ? 72 : 104,
-              child: _PianoKeyboard(
-                lowPitch: pitchRange.$1,
-                highPitch: pitchRange.$2,
-                activePitches: activePitches,
+            ],
+            selected: {_showPianoRoll},
+            onSelectionChanged: (selection) =>
+                setState(() => _showPianoRoll = selection.first),
+          ),
+        ),
+        Expanded(
+          child: _showPianoRoll
+              ? Column(
+                  children: [
+                    Expanded(
+                      child: _PianoRoll(
+                        notes: visualization.notes,
+                        ticksPerBeat: visualization.ticksPerBeat,
+                        currentTick: _currentTick,
+                        lowPitch: pitchRange.$1,
+                        highPitch: pitchRange.$2,
+                      ),
+                    ),
+                    SizedBox(
+                      height: 72,
+                      child: _PianoKeyboard(
+                        lowPitch: pitchRange.$1,
+                        highPitch: pitchRange.$2,
+                        activePitches: activePitches,
+                      ),
+                    ),
+                  ],
+                )
+              : TraditionalScore(score: score, currentTick: _currentTick),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(
+            children: [
+              Text(
+                '${_midiBytes!.length} octets',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: isLandscape ? 2 : 8,
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    '${_midiBytes!.length} octets',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const Spacer(),
-                  if (playbackSupported) ...[
-                    FilledButton.icon(
-                      key: const Key('play_pause_fab'),
-                      onPressed: _isPreparingPlayback ? null : _togglePlayback,
-                      icon: _isPreparingPlayback
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : Icon(
-                              _isPlaying ? Icons.pause : Icons.play_arrow,
-                            ),
-                      label: Text(
-                        _isPlaying
+              const Spacer(),
+              if (playbackSupported) ...[
+                FilledButton.icon(
+                  key: const Key('play_pause_fab'),
+                  onPressed: _isPreparingPlayback ? null : _togglePlayback,
+                  icon: _isPreparingPlayback
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                  label: Text(
+                    _isPreparingPlayback
+                        ? 'Préparation…'
+                        : _isPlaying
                             ? 'Pause'
                             : _playbackComplete
                                 ? 'Rejouer'
                                 : 'Lire',
-                      ),
-                    ),
-                    IconButton(
-                      key: const Key('stop_playback'),
-                      onPressed: _isPreparingPlayback || !_hasPreparedPlayback
-                          ? null
-                          : _stopPlayback,
-                      tooltip: 'Arrêter',
-                      icon: const Icon(Icons.stop),
-                    ),
-                  ] else
-                    const Text('Lecture disponible sur Android 7+'),
-                ],
-              ),
-            ),
-            if (_playbackError != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: Text(
-                  _playbackError!,
-                  style: TextStyle(color: theme.colorScheme.error),
-                  textAlign: TextAlign.center,
+                  ),
                 ),
-              ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: SelectableText(
-                resultUrl,
-                style: Theme.of(context).textTheme.labelSmall,
-                maxLines: 1,
-              ),
+                IconButton(
+                  key: const Key('stop_playback'),
+                  onPressed: _isPreparingPlayback || !_hasPreparedPlayback
+                      ? null
+                      : _stopPlayback,
+                  tooltip: 'Arrêter',
+                  icon: const Icon(Icons.stop),
+                ),
+              ] else
+                const Text('Lecture disponible sur Android 7+'),
+            ],
+          ),
+        ),
+        if (playbackSupported && !_hasPreparedPlayback)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: Text(
+              'La première lecture télécharge la banque sonore GM (32 Mo). '
+              'Elle sera ensuite disponible hors ligne.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11),
             ),
-          ],
-        );
-      },
+          ),
+        if (_playbackError != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Text(
+              _playbackError!,
+              style: TextStyle(color: theme.colorScheme.error),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: SelectableText(
+            resultUrl,
+            style: Theme.of(context).textTheme.labelSmall,
+            maxLines: 1,
+          ),
+        ),
+      ],
     );
   }
 
@@ -459,100 +497,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-class _ScorePreview extends StatefulWidget {
-  const _ScorePreview({required this.filePath, required this.isPdf});
-
-  final String? filePath;
-  final bool isPdf;
-
-  @override
-  State<_ScorePreview> createState() => _ScorePreviewState();
-}
-
-class _ScorePreviewState extends State<_ScorePreview> {
-  late final Future<Uint8List> _pdfPreview = _renderFirstPdfPage();
-
-  Future<Uint8List> _renderFirstPdfPage() async {
-    final document = await PdfDocument.openFile(widget.filePath!);
-    PdfPage? page;
-    try {
-      page = await document.getPage(1);
-      final rendered = await page.render(
-        width: page.width * 2,
-        height: page.height * 2,
-        format: PdfPageImageFormat.png,
-        backgroundColor: '#FFFFFF',
-      );
-      if (rendered == null) {
-        throw StateError('Le rendu de la première page PDF a échoué.');
-      }
-      return rendered.bytes;
-    } finally {
-      if (page != null) await page.close();
-      await document.close();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filePath = widget.filePath;
-    return Container(
-      width: double.infinity,
-      color: Colors.white,
-      child: filePath == null
-          ? const Center(
-              child: Text(
-                'Aperçu de la partition non disponible',
-                style: TextStyle(color: Colors.black54),
-              ),
-            )
-          : widget.isPdf
-              ? FutureBuilder<Uint8List>(
-                  future: _pdfPreview,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Text(
-                          'Impossible d’afficher le PDF : ${snapshot.error}',
-                          style: const TextStyle(color: Colors.black54),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    }
-                    if (!snapshot.hasData) {
-                      return const Center(
-                        child: CircularProgressIndicator(),
-                      );
-                    }
-                    return Image.memory(
-                      snapshot.data!,
-                      fit: BoxFit.cover,
-                      alignment: Alignment.center,
-                      width: double.infinity,
-                      height: double.infinity,
-                    );
-                  },
-                )
-              : Image.file(
-                  File(filePath),
-                  fit: BoxFit.cover,
-                  alignment: Alignment.center,
-                  width: double.infinity,
-                  height: double.infinity,
-                  errorBuilder: (context, error, stackTrace) => Center(
-                    child: Text(
-                      'Impossible d’afficher l’image : $error',
-                      style: const TextStyle(color: Colors.black54),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-    );
-  }
-}
-
 class _PianoRoll extends StatelessWidget {
   const _PianoRoll({
     required this.notes,
@@ -571,6 +515,7 @@ class _PianoRoll extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
+      key: const Key('piano_roll_view'),
       color: const Color(0xFF090A0E),
       child: CustomPaint(
         painter: _PianoRollPainter(

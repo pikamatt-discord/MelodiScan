@@ -1058,3 +1058,32 @@ async def get_task_result(task_id: str):
         media_type="audio/midi",
         filename=f"score_{task_id}.mid"
     )
+
+
+@app.get("/api/v1/result/{task_id}/musicxml")
+async def get_task_musicxml(task_id: str):
+    task_info = get_task_state(task_id)
+    if not task_info:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task_info.get("status") == "STATUS_FAILED":
+        raise HTTPException(status_code=422, detail=task_info.get("error", "Image processing failed."))
+    if task_info.get("status") != "STATUS_COMPLETED":
+        raise HTTPException(status_code=409, detail="Image processing has not completed.")
+
+    musicxml_path = task_info.get("musicxml_path")
+    if (
+        not musicxml_path
+        or not os.path.isfile(musicxml_path)
+        or os.path.getsize(musicxml_path) == 0
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="Completed task has no valid MusicXML result.",
+        )
+
+    return FileResponse(
+        musicxml_path,
+        media_type="application/vnd.recordare.musicxml+xml",
+        filename=f"score_{task_id}.musicxml",
+    )

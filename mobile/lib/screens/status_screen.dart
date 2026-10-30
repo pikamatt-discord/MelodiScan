@@ -8,8 +8,6 @@ class StatusScreen extends StatefulWidget {
   final String taskId;
   final String title;
   final String serverUrl;
-  final String? sourceFilePath;
-  final bool sourceFileIsPdf;
   final String apiKey;
   final http.Client? httpClient;
 
@@ -18,8 +16,6 @@ class StatusScreen extends StatefulWidget {
     required this.taskId,
     required this.title,
     required this.serverUrl,
-    this.sourceFilePath,
-    this.sourceFileIsPdf = false,
     this.apiKey = '',
     this.httpClient,
   });
@@ -144,8 +140,6 @@ class _StatusScreenState extends State<StatusScreen> {
           taskId: widget.taskId,
           title: widget.title,
           serverUrl: widget.serverUrl,
-          sourceFilePath: widget.sourceFilePath,
-          sourceFileIsPdf: widget.sourceFileIsPdf,
           apiKey: widget.apiKey,
           httpClient: widget.httpClient,
         ),

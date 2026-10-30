@@ -98,6 +98,42 @@ final validMidiBytes = Uint8List.fromList([
   0,
 ]);
 
+const validMusicXml = '''
+<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>24</divisions>
+        <key><fifths>-1</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <note>
+        <pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch>
+        <duration>24</duration><type>quarter</type>
+      </note>
+    </measure>
+  </part>
+</score-partwise>
+''';
+
+http.Response _playerResponse(http.Request request) {
+  if (request.url.path.endsWith('/musicxml')) {
+    return http.Response(
+      validMusicXml,
+      200,
+      headers: {'content-type': 'application/vnd.recordare.musicxml+xml'},
+    );
+  }
+  return http.Response.bytes(
+    validMidiBytes,
+    200,
+    headers: {'content-type': 'audio/midi'},
+  );
+}
+
 void main() {
   test('MIDI visualization extracts note pitch and duration', () {
     final visualization = MidiVisualization.parse(validMidiBytes);
@@ -112,11 +148,7 @@ void main() {
 
   testWidgets('PlayerScreen plays, pauses, and stops a verified MIDI result',
       (tester) async {
-    final client = MockClient((_) async => http.Response.bytes(
-          validMidiBytes,
-          200,
-          headers: {'content-type': 'audio/midi'},
-        ));
+    final client = MockClient((request) async => _playerResponse(request));
     final playback = FakeMidiPlayback();
 
     await tester.pumpWidget(
@@ -136,10 +168,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Symphonie No. 5'), findsOneWidget);
-    expect(find.text('Aperçu de la partition non disponible'), findsOneWidget);
     expect(find.text('34 octets'), findsOneWidget);
+    expect(find.text('Partition'), findsOneWidget);
+    expect(find.byKey(const Key('traditional_score_view')), findsOneWidget);
     expect(find.text('Lire'), findsOneWidget);
     expect(find.byKey(const Key('stop_playback')), findsOneWidget);
+
+    await tester.tap(find.text('Piano roll'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('piano_roll_view')), findsOneWidget);
+    await tester.tap(find.text('Partition'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('traditional_score_view')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('play_pause_fab')));
     await tester.pumpAndSettle();
@@ -189,11 +229,7 @@ void main() {
 
   testWidgets('PlayerScreen explains when playback is not supported',
       (tester) async {
-    final client = MockClient((_) async => http.Response.bytes(
-          validMidiBytes,
-          200,
-          headers: {'content-type': 'audio/midi'},
-        ));
+    final client = MockClient((request) async => _playerResponse(request));
     final playback = FakeMidiPlayback(isSupported: false);
 
     await tester.pumpWidget(
