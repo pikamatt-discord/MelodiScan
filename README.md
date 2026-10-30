@@ -104,7 +104,7 @@ Le script automatise les étapes suivantes :
 3. Détecte l’adresse IPv4 du serveur sur le réseau local et configure HTTPS pour cette adresse, sans réglage DNS.
 4. Génère et conserve une clé API et les identifiants du dashboard dans `.env` (permissions privées).
 5. Récupère la CA publique Caddy et redémarre le proxy et le générateur pour qu’ils utilisent la configuration et le certificat locaux. Interroge ensuite **l’URL HTTPS exacte du serveur** sur `/health`, valide le certificat avec cette CA et exige HTTP 200 ainsi que Redis, le worker, Audiveris et le générateur opérationnels.
-6. Demande au générateur Flutter/Android conteneurisé de compiler un véritable APK Release avec l’adresse vérifiée, la clé API et la CA ; vérifie le paquet et le publie dans `data/apk/app-release.apk`.
+6. Demande au générateur Flutter/Android conteneurisé de compiler un véritable APK Release avec l’adresse vérifiée, la clé API et la CA ; vérifie le paquet et le publie dans `data/apk/app-release.apk`. La clé de signature Android est conservée dans `data/android-config` pour que les versions successives puissent mettre à jour l’application installée.
 
 À la fin, le script affiche l’URL du dashboard et l’URL API copiables, les identifiants et le chemin de l’APK. Il confirme explicitement que `GET https://<IP-du-serveur>/health` a répondu HTTP 200 avec les dépendances requises en ligne. L’URL API intégrée à l’APK est cette adresse réseau vérifiée, jamais `localhost`. Le téléphone doit être sur le même réseau ; installez l’APK fourni, sans configurer de DNS ni installer de certificat sur le téléphone. La clé API est intégrée à cet APK : elle convient à un usage personnel/familial sur réseau local, mais ne constitue pas une authentification individuelle forte.
 

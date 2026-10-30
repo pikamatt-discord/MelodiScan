@@ -23,6 +23,7 @@ mobile/.idea/
 # Docker / Temp data / Large binaries
 data/temp/
 data/apk/
+data/android-config/
 data/caddy/
 data/caddy-root.crt
 melodiscan-root.crt

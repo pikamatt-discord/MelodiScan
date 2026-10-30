@@ -120,6 +120,18 @@ set_env DASHBOARD_USERNAME "$DASHBOARD_USERNAME"
 set_env DASHBOARD_PASSWORD "$DASHBOARD_PASSWORD"
 set_env MELODISCAN_HOST "$LAN_IP"
 
+mkdir -p data/android-config
+chmod 700 data/android-config
+if [[ ! -s data/android-config/debug.keystore ]]; then
+  if "${DOCKER[@]}" cp melodiscan_apk_builder:/root/.android/debug.keystore \
+    data/android-config/debug.keystore >/dev/null 2>&1; then
+    chmod 600 data/android-config/debug.keystore
+    printf 'Clé de signature APK existante conservée pour permettre les mises à jour de l’application.\n'
+  else
+    printf 'Aucune clé APK précédente détectée; la clé de signature sera conservée pour les prochaines compilations.\n'
+  fi
+fi
+
 printf 'Démarrage des services MelodiScan sur https://%s ...\n' "$LAN_IP"
 compose up -d --build
 

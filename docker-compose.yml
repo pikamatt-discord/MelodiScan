@@ -55,6 +55,7 @@ services:
     volumes:
       - ./mobile:/workspace/mobile
       - ./data/apk:/output
+      - ./data/android-config:/root/.android
       - ./data/caddy-root.crt:/run/secrets/caddy-root.crt:ro
       - apk_builder_pub_cache:/root/.pub-cache
       - apk_builder_gradle_cache:/root/.gradle
