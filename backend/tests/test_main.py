@@ -121,6 +121,11 @@ def test_dashboard_requires_credentials_when_configured(monkeypatch):
         auth=("admin", "dashboard-test-password"),
     )
     assert response.status_code == 200
+    assert client.get("/dashboard/logs").status_code == 401
+    assert client.get(
+        "/dashboard/logs",
+        auth=("admin", "dashboard-test-password"),
+    ).status_code == 200
     assert client.get("/api/v1/stats").status_code == 401
     assert client.get(
         "/api/v1/stats",
@@ -137,6 +142,36 @@ def test_dashboard_exposes_management_views_and_apk_generation():
     assert "Historique des numérisations" in response.text
     assert "Générer l’APK" in response.text
     assert "/api/v1/apk/build" in response.text
+    assert "/dashboard/logs" in response.text
+
+
+def test_dashboard_logs_page_and_task_log_endpoint():
+    set_task_state("failed-log-task", {
+        "task_id": "failed-log-task",
+        "title": "Export test",
+        "status": "STATUS_FAILED",
+        "error": "Detailed Audiveris export error",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    page = client.get("/dashboard/logs")
+    logs = client.get("/api/v1/tasks/failed-log-task/logs")
+
+    assert page.status_code == 200
+    assert "Diagnostics détaillés" in page.text
+    assert logs.status_code == 200
+    assert logs.json()["logs"] == "Detailed Audiveris export error"
+    assert logs.json()["summary"] == main.TASK_FAILURE_SUMMARY
+
+
+def test_task_logs_are_only_available_for_failed_tasks():
+    set_task_state("running-log-task", {
+        "task_id": "running-log-task",
+        "status": "STATUS_RUNNING_OMR",
+    })
+
+    assert client.get("/api/v1/tasks/missing/logs").status_code == 404
+    assert client.get("/api/v1/tasks/running-log-task/logs").status_code == 409
 
 
 def test_scan_rejects_non_image_upload():
@@ -204,6 +239,24 @@ def test_omr_engine_includes_stdout_when_audiveris_stderr_is_empty(tmp_path, mon
         OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
 
 
+def test_omr_engine_preserves_start_and_end_of_long_diagnostics(tmp_path, monkeypatch):
+    class ProcessResult:
+        returncode = 1
+        stderr = b"Initial export context\n" + b"x" * 5000
+        stdout = b"Final export failure"
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", lambda *args, **kwargs: ProcessResult())
+
+    with pytest.raises(OMRProcessingError) as error:
+        OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
+
+    message = str(error.value)
+    assert "Initial export context" in message
+    assert "Final export failure" in message
+    assert "Audiveris output truncated" in message
+    assert len(message) < 4500
+
+
 def test_worker_persists_processing_error(tmp_path, monkeypatch):
     from app.tasks import process_omr_task
 
@@ -265,8 +318,9 @@ def test_status_stream_times_out_with_a_real_failure(monkeypatch):
 
     assert response.status_code == 200
     assert '"status": "STATUS_FAILED"' in response.text
-    assert "timed out" in response.text
-    assert get_task_state("stalled-task")["status"] == "STATUS_FAILED"
+    assert "dashboard" in response.text
+    assert "timed out" not in response.text
+    assert get_task_state("stalled-task")["error"] == "Image processing timed out after 0 seconds."
 
 
 def test_result_returns_only_the_completed_midi_file(tmp_path):
@@ -328,6 +382,7 @@ def test_stats_exclude_running_tasks_from_success_rate_and_hide_internal_paths()
     set_task_state("failed", {
         "task_id": "failed",
         "status": "STATUS_FAILED",
+        "error": "private detailed diagnostic",
         "created_at": now,
     })
     set_task_state("queued", {
@@ -343,6 +398,9 @@ def test_stats_exclude_running_tasks_from_success_rate_and_hide_internal_paths()
     assert data["success_rate"] == 50.0
     assert data["running_scans"] == 1
     assert data["recent_tasks"][0]["task_id"] == "queued"
+    failed_task = next(task for task in data["recent_tasks"] if task["task_id"] == "failed")
+    assert failed_task["error_summary"] == main.TASK_FAILURE_SUMMARY
+    assert "error" not in failed_task
     assert all("file_path" not in task for task in data["recent_tasks"])
 
 

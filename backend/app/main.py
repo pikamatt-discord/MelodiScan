@@ -63,7 +63,7 @@ async def authenticate_request(request: Request, call_next):
                 headers={"WWW-Authenticate": "ApiKey"},
             )
 
-    if path in {"/", "/dashboard"} and DASHBOARD_USERNAME and not _has_dashboard_credentials(
+    if (path == "/" or path.startswith("/dashboard")) and DASHBOARD_USERNAME and not _has_dashboard_credentials(
         request.headers.get("Authorization", "")
     ):
         return JSONResponse(
@@ -102,6 +102,7 @@ def get_redis_client():
 
 
 LOCAL_TASKS_DB: Dict[str, Dict[str, Any]] = {}
+TASK_FAILURE_SUMMARY = "Échec du traitement. Consultez les diagnostics dans le dashboard."
 
 
 def set_task_state(task_id: str, data: dict):
@@ -256,15 +257,39 @@ async def get_system_stats():
         "primary_omr_engine": "Audiveris v5.10.0",
         "recent_tasks": [
             {
-                key: task.get(key)
-                for key in (
-                    "task_id", "title", "status", "error", "created_at",
-                    "completed_at", "failed_at",
-                )
-                if key in task
+                "task_id": task.get("task_id"),
+                "title": task.get("title"),
+                "status": task.get("status"),
+                "error_summary": (
+                    task.get("error_summary") or TASK_FAILURE_SUMMARY
+                    if task.get("status") == "STATUS_FAILED"
+                    else None
+                ),
+                "created_at": task.get("created_at"),
+                "completed_at": task.get("completed_at"),
+                "failed_at": task.get("failed_at"),
             }
             for task in reversed(tasks[-50:])
         ],
+    }
+
+
+@app.get("/api/v1/tasks/{task_id}/logs")
+async def get_task_logs(task_id: str):
+    task = get_task_state(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if task.get("status") != "STATUS_FAILED":
+        raise HTTPException(status_code=409, detail="Detailed diagnostics are available only for failed tasks.")
+
+    return {
+        "task_id": task_id,
+        "title": task.get("title") or "Partition sans titre",
+        "status": task.get("status"),
+        "created_at": task.get("created_at"),
+        "failed_at": task.get("failed_at"),
+        "summary": task.get("error_summary") or TASK_FAILURE_SUMMARY,
+        "logs": task.get("error") or "Aucun diagnostic détaillé n’a été enregistré.",
     }
 
 
@@ -470,6 +495,7 @@ async def dashboard():
         .status-pill.failed { color: #ff8795; background: rgba(255,101,119,.12); }
         .status-pill.running { color: var(--accent-cyan); background: rgba(0,242,254,.1); }
         .task-error { color: #ff8795; margin-top: 5px; max-width: 420px; white-space: normal; }
+        .task-error:hover { color: #ffb6c0; }
         .last-updated { color: var(--text-muted); font-size: 12px; }
         @media (max-width: 650px) {
             body { padding: 18px 12px; }
@@ -507,6 +533,7 @@ async def dashboard():
                     <div style="color: var(--text-muted); font-size: 14px;">Tableau de Bord & Statistiques OMR Temps Réel</div>
                 </div>
             </div>
+            <a class="btn-secondary" href="/dashboard/logs">Diagnostics détaillés</a>
             <span class="badge" id="server-badge">Vérification des services…</span>
         </div>
 
@@ -679,11 +706,14 @@ async def dashboard():
                 const result = completed
                     ? `<a href="/api/v1/result/${encodeURIComponent(task.task_id)}">Télécharger MIDI</a>`
                     : '—';
+                const errorLink = failed
+                    ? `<a class="task-error" href="/dashboard/logs?task_id=${encodeURIComponent(task.task_id)}">Voir les diagnostics</a>`
+                    : '';
                 return `<tr>
                     <td><code>${escapeHtml((task.task_id || '').slice(0, 12))}</code></td>
                     <td><strong>${escapeHtml(task.title || 'Partition sans titre')}</strong></td>
                     <td><span class="status-pill ${className}">${escapeHtml(statusLabel)}</span>
-                        ${failed && task.error ? `<div class="task-error">${escapeHtml(task.error)}</div>` : ''}</td>
+                        ${errorLink}</td>
                     <td>${escapeHtml(formatDate(task.created_at))}</td>
                     <td>${result}</td>
                 </tr>`;
@@ -782,6 +812,14 @@ async def dashboard():
 </html>"""
     return HTMLResponse(content=html_content)
 
+
+@app.get("/dashboard/logs", response_class=HTMLResponse)
+async def dashboard_logs():
+    logs_page = os.path.join(os.path.dirname(__file__), "dashboard_logs.html")
+    with open(logs_page, encoding="utf-8") as page:
+        return HTMLResponse(content=page.read())
+
+
 @app.get("/download/app-release.apk")
 async def download_apk():
     apk_path = "data/apk/app-release.apk"
@@ -849,6 +887,7 @@ async def scan_score(
         task_info.update({
             "status": "STATUS_FAILED",
             "error": f"Could not queue image processing: {exc}",
+            "error_summary": TASK_FAILURE_SUMMARY,
             "failed_at": datetime.now(timezone.utc).isoformat(),
         })
         set_task_state(task_id, task_info)
@@ -889,7 +928,7 @@ async def stream_task_status(task_id: str):
             if not task_info:
                 task_info = {
                     "status": "STATUS_FAILED",
-                    "error": "Task state is no longer available.",
+                    "error_summary": TASK_FAILURE_SUMMARY,
                 }
             current_status = task_info.get("status", "STATUS_QUEUED")
 
@@ -899,7 +938,11 @@ async def stream_task_status(task_id: str):
                     "task_id": task_id,
                     "status": current_status,
                     "progress": progress_by_status.get(current_status, 0.0),
-                    "error": task_info.get("error"),
+                    "error": (
+                        task_info.get("error_summary") or TASK_FAILURE_SUMMARY
+                        if current_status == "STATUS_FAILED"
+                        else None
+                    ),
                 })
                 yield f"data: {data}\n\n"
 
@@ -911,6 +954,7 @@ async def stream_task_status(task_id: str):
                 task_info.update({
                     "status": "STATUS_FAILED",
                     "error": f"Image processing timed out after {TASK_TIMEOUT_SECONDS} seconds.",
+                    "error_summary": "Le traitement a expiré. Consultez les diagnostics dans le dashboard.",
                     "failed_at": datetime.now(timezone.utc).isoformat(),
                 })
                 set_task_state(task_id, task_info)
@@ -918,7 +962,7 @@ async def stream_task_status(task_id: str):
                     "task_id": task_id,
                     "status": "STATUS_FAILED",
                     "progress": 0.0,
-                    "error": task_info["error"],
+                    "error": task_info["error_summary"],
                 })
                 yield f"data: {data}\n\n"
                 break

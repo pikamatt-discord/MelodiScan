@@ -2,8 +2,22 @@ import os
 import subprocess
 
 
+AUDIVERIS_DIAGNOSTIC_LIMIT = 4000
+
+
 class OMRProcessingError(RuntimeError):
     pass
+
+
+def _diagnostic_excerpt(output: str) -> str:
+    if len(output) <= AUDIVERIS_DIAGNOSTIC_LIMIT:
+        return output
+    head_length = AUDIVERIS_DIAGNOSTIC_LIMIT // 2
+    tail_length = AUDIVERIS_DIAGNOSTIC_LIMIT - head_length
+    return (
+        f"{output[:head_length]}\n... Audiveris output truncated ...\n"
+        f"{output[-tail_length:]}"
+    )
 
 
 class OMREngine:
@@ -33,7 +47,7 @@ class OMREngine:
                 for output in (res.stderr, res.stdout)
                 if output
             ).strip()
-            detail = error[-500:] if error else "No diagnostic was returned."
+            detail = _diagnostic_excerpt(error) if error else "No diagnostic was returned."
             raise OMRProcessingError(f"Audiveris failed with exit code {res.returncode}: {detail}")
         if not os.path.isfile(output_musicxml) or os.path.getsize(output_musicxml) == 0:
             raise OMRProcessingError("Audiveris completed without producing a MusicXML file.")

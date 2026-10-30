@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnostics détaillés · MelodiScan</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0D0E15;
+            --surface: #161A20;
+            --surface-elevated: #202630;
+            --primary: #9D4EDD;
+            --accent: #00F2FE;
+            --text: #F8F9FA;
+            --muted: #94A3B8;
+            --border: #2A2F3A;
+            --error: #ff8795;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 28px 16px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        main { max-width: 1200px; margin: 0 auto; }
+        header, .toolbar, .log-entry {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        header { margin-bottom: 22px; }
+        h1 { margin: 0; font-size: 25px; }
+        h2 { margin: 0; font-size: 18px; }
+        a, button { font: inherit; }
+        a, .refresh {
+            color: var(--accent);
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            background: var(--surface-elevated);
+            padding: 10px 14px;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+            gap: 18px;
+        }
+        .panel {
+            min-width: 0;
+            padding: 18px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: var(--surface);
+        }
+        .toolbar { margin-bottom: 14px; }
+        #task-list { display: grid; gap: 8px; }
+        .log-entry {
+            width: 100%;
+            padding: 12px;
+            color: var(--text);
+            text-align: left;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-elevated);
+            cursor: pointer;
+        }
+        .log-entry.selected { border-color: var(--primary); }
+        .log-entry strong { display: block; overflow-wrap: anywhere; }
+        .log-entry small, .muted { color: var(--muted); }
+        .log-entry small { display: block; margin-top: 5px; }
+        #diagnostics {
+            min-height: 300px;
+            max-height: 68vh;
+            overflow: auto;
+            margin: 14px 0 0;
+            padding: 16px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #0a0c11;
+            color: #e2e8f0;
+            font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        .error { color: var(--error); }
+        @media (max-width: 760px) {
+            body { padding: 18px 12px; }
+            header { align-items: flex-start; flex-direction: column; }
+            .layout { grid-template-columns: 1fr; }
+            #diagnostics { max-height: 55vh; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <div>
+            <h1>Diagnostics détaillés</h1>
+            <div class="muted">Les erreurs complètes restent ici, séparées de l’historique principal.</div>
+        </div>
+        <a href="/dashboard">Retour au dashboard</a>
+    </header>
+    <div class="layout">
+        <section class="panel">
+            <div class="toolbar">
+                <h2>Échecs récents</h2>
+                <button class="refresh" id="refresh" type="button">Actualiser</button>
+            </div>
+            <div id="task-list" class="muted">Chargement des tâches…</div>
+        </section>
+        <section class="panel">
+            <h2 id="log-title">Sélectionnez un échec</h2>
+            <div id="log-meta" class="muted" style="margin-top: 7px;"></div>
+            <pre id="diagnostics" class="muted">Les diagnostics apparaîtront ici.</pre>
+        </section>
+    </div>
+</main>
+<script>
+    let failedTasks = [];
+    let selectedTaskId = '';
+
+    async function apiRequest(url) {
+        const response = await fetch(url, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || `Erreur HTTP ${response.status}`);
+        return payload;
+    }
+
+    function formatDate(value) {
+        if (!value) return 'Date inconnue';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? 'Date inconnue' : date.toLocaleString('fr-FR');
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, character => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[character]);
+    }
+
+    async function showTask(taskId) {
+        selectedTaskId = taskId;
+        document.querySelectorAll('.log-entry').forEach(button => {
+            button.classList.toggle('selected', button.dataset.taskId === taskId);
+        });
+        const task = failedTasks.find(item => item.task_id === taskId);
+        if (!task) return;
+        document.getElementById('log-title').textContent = task.title || 'Partition sans titre';
+        document.getElementById('log-meta').textContent =
+            `ID ${task.task_id} · échec ${formatDate(task.failed_at || task.created_at)}`;
+        const output = document.getElementById('diagnostics');
+        output.classList.remove('error');
+        output.textContent = 'Chargement des diagnostics…';
+        try {
+            const details = await apiRequest(`/api/v1/tasks/${encodeURIComponent(taskId)}/logs`);
+            output.textContent = details.logs;
+        } catch (error) {
+            output.textContent = error.message;
+            output.classList.add('error');
+        }
+    }
+
+    async function loadFailures() {
+        const list = document.getElementById('task-list');
+        list.textContent = 'Chargement des tâches…';
+        try {
+            const data = await apiRequest('/api/v1/stats');
+            failedTasks = (data.recent_tasks || []).filter(task => task.status === 'STATUS_FAILED');
+            if (!failedTasks.length) {
+                list.textContent = 'Aucun échec dans les 50 traitements les plus récents.';
+                document.getElementById('log-title').textContent = 'Aucun échec récent';
+                document.getElementById('log-meta').textContent = '';
+                document.getElementById('diagnostics').textContent = 'Aucun diagnostic à afficher.';
+                selectedTaskId = '';
+                return;
+            }
+            list.innerHTML = failedTasks.map(task => `
+                <button class="log-entry" type="button" data-task-id="${escapeHtml(task.task_id)}">
+                    <span><strong>${escapeHtml(task.title || 'Partition sans titre')}</strong>
+                    <small>${escapeHtml(formatDate(task.failed_at || task.created_at))}</small></span>
+                    <small class="error">Échec</small>
+                </button>`).join('');
+            list.querySelectorAll('.log-entry').forEach(button => {
+                button.addEventListener('click', () => showTask(button.dataset.taskId));
+            });
+            const requestedId = new URLSearchParams(location.search).get('task_id');
+            const nextTaskId = failedTasks.some(task => task.task_id === requestedId)
+                ? requestedId
+                : failedTasks.some(task => task.task_id === selectedTaskId)
+                    ? selectedTaskId
+                    : failedTasks[0].task_id;
+            await showTask(nextTaskId);
+        } catch (error) {
+            list.textContent = `Impossible de charger les échecs : ${error.message}`;
+            list.classList.add('error');
+        }
+    }
+
+    document.getElementById('refresh').addEventListener('click', loadFailures);
+    loadFailures();
+</script>
+</body>
+</html>

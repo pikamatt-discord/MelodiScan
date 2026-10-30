@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.process_omr_task")
 def process_omr_task(task_id: str, image_path: str, title: str) -> dict:
-    from app.main import get_task_state, set_task_state
+    from app.main import TASK_FAILURE_SUMMARY, get_task_state, set_task_state
 
     output_dir = "data/temp"
     os.makedirs(output_dir, exist_ok=True)
@@ -56,7 +56,8 @@ def process_omr_task(task_id: str, image_path: str, title: str) -> dict:
         logger.exception("OMR task %s failed.", task_id)
         state.update({
             "status": "STATUS_FAILED",
-            "error": str(exc)[:1000],
+            "error": str(exc)[:4500],
+            "error_summary": TASK_FAILURE_SUMMARY,
             "failed_at": datetime.now(timezone.utc).isoformat(),
         })
         set_task_state(task_id, state)
