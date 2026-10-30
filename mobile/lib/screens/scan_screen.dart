@@ -70,14 +70,23 @@ class _ScanScreenState extends State<ScanScreen> {
 
   Future<void> _selectPdf() async {
     try {
-      final pdf = await FilePicker.pickFile(
+      final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: const ['pdf'],
+        allowMultiple: false,
+        withData: false,
       );
-      if (pdf == null || !mounted) return;
+      if (result == null || result.files.isEmpty || !mounted) return;
+
+      final pdf = result.files.single;
+      final path = pdf.path;
+      if (path == null) {
+        _showError('Impossible d’accéder au fichier PDF sélectionné.');
+        return;
+      }
 
       setState(() {
-        _selectedFile = pdf.xFile;
+        _selectedFile = XFile(path, name: pdf.name);
         _selectedFileName = pdf.name;
         _selectedFileIsPdf = true;
       });
