@@ -7,6 +7,7 @@ import os
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -113,6 +114,54 @@ if directory.is_dir():
     return success
 
 
+def test_apk_generation(headers: dict[str, str]) -> bool:
+    try:
+        status, body, _ = request(
+            f"{API_URL}/api/v1/apk/build",
+            headers=headers,
+            data=b"",
+            timeout=30,
+        )
+        response = json.loads(body)
+        if status not in {202, 409}:
+            return report("dashboard generates a real Android Release APK", False,
+                          f"build request returned HTTP {status}")
+        build_id = response.get("build_id")
+        if not build_id:
+            return report("dashboard generates a real Android Release APK", False,
+                          "build service returned no build ID")
+
+        deadline = time.monotonic() + 3600
+        while time.monotonic() < deadline:
+            status, body, _ = request(
+                f"{API_URL}/api/v1/apk/build/{build_id}",
+                headers=headers,
+                timeout=30,
+            )
+            if status != 200:
+                return report("dashboard generates a real Android Release APK", False,
+                              f"build status returned HTTP {status}")
+            state = json.loads(body)
+            if state.get("status") == "completed":
+                apk = state.get("apk", {})
+                return report(
+                    "dashboard generates a real Android Release APK",
+                    apk.get("available") is True
+                    and apk.get("size_bytes", 0) > 0
+                    and bool(apk.get("sha256"))
+                    and apk.get("signature_verified") is True,
+                    f"{apk.get('size_bytes', 0)} bytes, SHA-256 and Android signature verified",
+                )
+            if state.get("status") == "failed":
+                return report("dashboard generates a real Android Release APK", False,
+                              "Flutter build failed; inspect the dashboard for the build log")
+            time.sleep(2)
+        return report("dashboard generates a real Android Release APK", False,
+                      "build timed out after 60 minutes")
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        return report("dashboard generates a real Android Release APK", False, str(error))
+
+
 def main() -> int:
     env = read_environment()
     api_key = env.get("API_KEY", "")
@@ -138,7 +187,11 @@ def main() -> int:
         dependencies = health.get("dependencies", {})
         checks.append(report(
             "HTTPS certificate and health",
-            status == 200 and health.get("status") == "ok",
+            status == 200
+            and health.get("status") == "ok"
+            and all(dependencies.get(name) is True for name in (
+                "redis", "celery_worker", "audiveris", "apk_builder"
+            )),
             f"HTTP {status}; dependencies: {dependencies}",
         ))
     except Exception as error:
@@ -160,6 +213,22 @@ def main() -> int:
         stats = json.loads(body) if status == 200 else {}
         checks.append(report("API accepts configured key", status == 200 and "total_scans" in stats,
                              f"HTTP {status}"))
+
+        checks.append(test_apk_generation(headers))
+
+        status, body, _ = request(f"{API_URL}/api/v1/apk/status", headers=headers)
+        apk_status = json.loads(body) if status == 200 else {}
+        artifact = apk_status.get("apk", {})
+        checks.append(report(
+            "dashboard APK builder reports a real generated artifact",
+            status == 200
+            and apk_status.get("status") != "building"
+            and artifact.get("available") is True
+            and artifact.get("size_bytes", 0) > 0
+            and bool(artifact.get("sha256"))
+            and artifact.get("signature_verified") is True,
+            f"HTTP {status}; build status: {apk_status.get('status')}",
+        ))
 
         status, _, _ = request(f"{API_URL}/dashboard")
         checks.append(report("dashboard rejects missing credentials", status == 401, f"HTTP {status}"))

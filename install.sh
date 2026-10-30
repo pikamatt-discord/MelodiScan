@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 REPOSITORY_URL="https://github.com/pikamatt-discord/MelodiScan.git"
 DEFAULT_REPOSITORY="$HOME/MelodiScan"
-ANDROID_COMMAND_LINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
 
 fail() {
   printf 'Erreur : %s\n' "$*" >&2
@@ -80,8 +79,9 @@ if [[ -z "$LAN_IP" ]]; then
 fi
 [[ "$LAN_IP" != 127.* ]] || fail "Impossible de détecter une adresse IPv4 du réseau local."
 
-mkdir -p data
+mkdir -p data/temp data/apk
 touch .env
+touch data/caddy-root.crt
 chmod 600 .env
 
 get_env() {
@@ -116,97 +116,93 @@ set_env MELODISCAN_HOST "$LAN_IP"
 printf 'Démarrage des services MelodiScan sur https://%s ...\n' "$LAN_IP"
 compose up -d --build
 
+ca_ready=false
+for attempt in $(seq 1 30); do
+  if "${DOCKER[@]}" cp melodiscan_https:/data/caddy/pki/authorities/local/root.crt \
+    data/caddy-root.crt >/dev/null 2>&1 && [[ -s data/caddy-root.crt ]]; then
+    ca_ready=true
+    break
+  fi
+  sleep 1
+done
+[[ "$ca_ready" == true ]] || fail "Le certificat racine Caddy n'a pas été généré après 30 secondes."
+
+BASE_URL="https://${LAN_IP}"
+HEALTH_URL="${BASE_URL}/health"
 ready=false
 for attempt in $(seq 1 60); do
-  health_response="$(curl --insecure --silent --show-error --connect-timeout 2 \
-    "https://${LAN_IP}/health" 2>/dev/null || true)"
-  if [[ -n "$health_response" ]] &&
-    printf '%s' "$health_response" |
-      python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "ok" else 1)' 2>/dev/null; then
+  health_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
+    --connect-timeout 2 --write-out $'\n%{http_code}' "$HEALTH_URL" 2>/dev/null || true)"
+  health_status="${health_response##*$'\n'}"
+  health_body="${health_response%$'\n'*}"
+  if [[ "$health_status" == 200 ]] &&
+    printf '%s' "$health_body" |
+      python3 -c '
+import json,sys
+data=json.load(sys.stdin)
+required=("redis","celery_worker","audiveris","apk_builder")
+sys.exit(0 if data.get("status") == "ok" and all(data.get("dependencies",{}).get(k) is True for k in required) else 1)
+' 2>/dev/null; then
     ready=true
     break
   fi
   sleep 2
 done
-[[ "$ready" == true ]] || fail "L’API, Redis, le worker ou Audiveris n’est pas opérationnel après 120 secondes. Consultez : docker compose logs"
-
-"${DOCKER[@]}" cp melodiscan_https:/data/caddy/pki/authorities/local/root.crt data/caddy-root.crt
-[[ -s data/caddy-root.crt ]] || fail "Le certificat racine Caddy n'a pas été généré."
+[[ "$ready" == true ]] ||
+  fail "Le contrôle réel de ${HEALTH_URL} (HTTPS avec la CA Caddy, HTTP 200 et tous les services) a échoué. Consultez : docker compose logs"
 
 if command -v update-ca-certificates >/dev/null 2>&1; then
   "${SUDO[@]}" install -m 0644 data/caddy-root.crt /usr/local/share/ca-certificates/melodiscan-caddy.crt
   "${SUDO[@]}" update-ca-certificates
 fi
 
-if ! command -v flutter >/dev/null 2>&1; then
-  "${SUDO[@]}" apt-get update
-  "${SUDO[@]}" apt-get install -y git curl unzip xz-utils zip libglu1-mesa openjdk-17-jdk
-  FLUTTER_ROOT="$HOME/.local/share/flutter"
-  if [[ ! -x "$FLUTTER_ROOT/bin/flutter" ]]; then
-    mkdir -p "$(dirname "$FLUTTER_ROOT")"
-    git clone --depth 1 --branch stable https://github.com/flutter/flutter.git "$FLUTTER_ROOT"
+printf 'URL HTTPS vérifiée : %s (GET /health : HTTP 200, Redis/worker/Audiveris/générateur APK opérationnels)\n' "$BASE_URL"
+printf 'Génération de l’APK Android Release dans le conteneur Flutter...\n'
+build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
+  --connect-timeout 5 --write-out $'\n%{http_code}' \
+  -X POST -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build")" ||
+  fail "Impossible de démarrer la génération de l’APK via ${BASE_URL}."
+build_http_status="${build_response##*$'\n'}"
+build_body="${build_response%$'\n'*}"
+if [[ "$build_http_status" != 202 && "$build_http_status" != 409 ]]; then
+  fail "Le générateur d’APK a refusé la demande (HTTP ${build_http_status})."
+fi
+BUILD_ID="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build_id",""))')"
+[[ "$BUILD_ID" =~ ^[0-9a-fA-F-]{36}$ ]] ||
+  fail "Le générateur n’a pas retourné un identifiant de build valide."
+
+apk_ready=false
+for attempt in $(seq 1 1800); do
+  build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
+    --connect-timeout 5 --write-out $'\n%{http_code}' \
+    -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build/${BUILD_ID}" 2>/dev/null || true)"
+  build_http_status="${build_response##*$'\n'}"
+  build_body="${build_response%$'\n'*}"
+  build_status="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+  if [[ "$build_http_status" != 200 ]]; then
+    fail "Impossible de vérifier le build APK via ${BASE_URL} (HTTP ${build_http_status})."
   fi
-  export PATH="$FLUTTER_ROOT/bin:$PATH"
-fi
-
-if ! command -v java >/dev/null 2>&1; then
-  "${SUDO[@]}" apt-get update
-  "${SUDO[@]}" apt-get install -y openjdk-17-jdk
-fi
-
-ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}"
-SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-if [[ ! -x "$SDKMANAGER" ]]; then
-  "${SUDO[@]}" apt-get install -y unzip
-  SDK_TEMP="$(mktemp -d)"
-  curl -fsSL "$ANDROID_COMMAND_LINE_TOOLS_URL" -o "$SDK_TEMP/android-tools.zip"
-  mkdir -p "$SDK_TEMP/extracted" "$ANDROID_SDK_ROOT/cmdline-tools"
-  unzip -q "$SDK_TEMP/android-tools.zip" -d "$SDK_TEMP/extracted"
-  mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-  cp -a "$SDK_TEMP/extracted/cmdline-tools/." "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
-  rm -rf "$SDK_TEMP"
-fi
-
-export ANDROID_SDK_ROOT
-export ANDROID_HOME="$ANDROID_SDK_ROOT"
-export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-FLUTTER_ROOT="$(cd "$(dirname "$(readlink -f "$(command -v flutter)")")/.." && pwd)"
-FLUTTER_GRADLE_EXTENSION="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
-[[ -f "$FLUTTER_GRADLE_EXTENSION" ]] ||
-  fail "Impossible de déterminer les prérequis Android depuis le SDK Flutter : $FLUTTER_GRADLE_EXTENSION"
-COMPILE_SDK="$(sed -n 's/.*val compileSdkVersion: Int = \([0-9][0-9]*\).*/\1/p' "$FLUTTER_GRADLE_EXTENSION" | head -n 1)"
-NDK_VERSION="$(sed -n 's/.*val ndkVersion: String = "\([^"]*\)".*/\1/p' "$FLUTTER_GRADLE_EXTENSION" | head -n 1)"
-[[ -n "$COMPILE_SDK" && -n "$NDK_VERSION" ]] ||
-  fail "Impossible d’extraire les versions Android requises par Flutter."
-set +o pipefail
-yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
-set -o pipefail
-"$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
-  "platform-tools" "platforms;android-${COMPILE_SDK}" \
-  "build-tools;${COMPILE_SDK}.0.0" "ndk;${NDK_VERSION}"
-
-flutter config --android-sdk "$ANDROID_SDK_ROOT"
-flutter config --no-analytics
-CA_BASE64="$(base64 -w 0 data/caddy-root.crt)"
-(
-  cd mobile
-  flutter pub get
-  flutter build apk --release \
-    --dart-define="MELODISCAN_API_URL=https://${LAN_IP}" \
-    --dart-define="MELODISCAN_API_KEY=${API_KEY}" \
-    --dart-define="MELODISCAN_ROOT_CA_BASE64=${CA_BASE64}"
-)
-
-APK_SOURCE="mobile/build/app/outputs/flutter-apk/app-release.apk"
-[[ -s "$APK_SOURCE" ]] || fail "La compilation s'est terminée sans produire l'APK attendu."
-mkdir -p data/apk
-install -m 0644 "$APK_SOURCE" data/apk/app-release.apk
+  if [[ "$build_status" == completed ]]; then
+    apk_ready=true
+    break
+  elif [[ "$build_status" == failed ]]; then
+    build_error="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error","erreur inconnue"))' 2>/dev/null || true)"
+    fail "La génération de l’APK a échoué : ${build_error}"
+  fi
+  if (( attempt % 15 == 0 )); then
+    printf 'Compilation toujours en cours (%.0f s)...\n' "$((attempt * 2))"
+  fi
+  sleep 2
+done
+[[ "$apk_ready" == true ]] || fail "La génération de l’APK n’a pas abouti en 60 minutes."
+[[ -s data/apk/app-release.apk ]] ||
+  fail "Le build est déclaré terminé, mais data/apk/app-release.apk est absent."
 
 printf '\nInstallation terminée.\n'
-printf 'Adresse MelodiScan : https://%s\n' "$LAN_IP"
-printf 'URL API préconfigurée dans l’APK : https://%s\n' "$LAN_IP"
+printf 'Dashboard : %s/dashboard\n' "$BASE_URL"
+printf 'URL API préconfigurée et vérifiée : %s (GET %s/health = HTTP 200)\n' "$BASE_URL" "$BASE_URL"
 printf 'Identifiant dashboard : %s\n' "$DASHBOARD_USERNAME"
 printf 'Mot de passe dashboard : %s\n' "$DASHBOARD_PASSWORD"
 printf 'APK Android : %s/data/apk/app-release.apk\n' "$REPOSITORY_ROOT"
-printf 'Téléchargement APK : https://%s/download/app-release.apk\n' "$LAN_IP"
+printf 'Téléchargement APK : %s/download/app-release.apk\n' "$BASE_URL"
 printf 'L’application mobile est préconfigurée ; aucun DNS ni certificat à installer sur le téléphone.\n'

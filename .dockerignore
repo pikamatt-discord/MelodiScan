@@ -1,0 +1,5 @@
+**
+!apk-builder/
+!apk-builder/Dockerfile
+!scripts/
+!scripts/apk-builder-service.py

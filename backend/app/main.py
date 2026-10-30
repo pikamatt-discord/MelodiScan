@@ -12,6 +12,7 @@ from typing import Dict, Any, AsyncGenerator
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 from pydantic import BaseModel
 import redis
 
@@ -29,6 +30,8 @@ DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 20 * 1024 * 1024))
 TASK_TIMEOUT_SECONDS = int(os.getenv("TASK_TIMEOUT_SECONDS", 600))
+APK_BUILDER_URL = os.getenv("APK_BUILDER_URL", "http://melodiscan-apk-builder:8090")
+MELODISCAN_HOST = os.getenv("MELODISCAN_HOST", "")
 CORS_ALLOW_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
@@ -148,6 +151,29 @@ class ScanResponse(BaseModel):
     message: str
 
 
+async def request_apk_builder(method: str, path: str) -> tuple[int, dict]:
+    headers = {"X-API-Key": API_KEY} if API_KEY else {}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.request(
+                method,
+                f"{APK_BUILDER_URL}{path}",
+                headers=headers,
+            )
+    except httpx.RequestError as exc:
+        logger.warning("APK builder request failed: %s", exc)
+        raise HTTPException(status_code=503, detail="APK builder is unavailable.") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        logger.error("APK builder returned a non-JSON response (HTTP %s).", response.status_code)
+        raise HTTPException(status_code=502, detail="APK builder returned an invalid response.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="APK builder returned an invalid response.")
+    return response.status_code, payload
+
+
 @app.get("/health")
 async def health_check():
     redis_online = get_redis_client() is not None
@@ -161,10 +187,18 @@ async def health_check():
         except Exception:
             logger.exception("Could not check Celery worker health.")
 
+    try:
+        builder_status, builder = await request_apk_builder("GET", "/health")
+        apk_builder_online = builder_status == 200 and builder.get("status") == "ok"
+    except HTTPException as exc:
+        logger.warning("APK builder health check failed: %s", exc.detail)
+        apk_builder_online = False
+
     dependencies = {
         "redis": redis_online,
         "celery_worker": worker_online,
         "audiveris": audiveris_available,
+        "apk_builder": apk_builder_online,
     }
     status = "ok" if all(dependencies.values()) else "degraded"
     return JSONResponse(
@@ -193,7 +227,14 @@ async def get_system_stats():
             "STATUS_EXPORTING_MIDI",
         }
     )
-    success_rate = (completed_scans / total_scans * 100) if total_scans else 0.0
+    finished_scans = completed_scans + failed_scans
+    success_rate = (completed_scans / finished_scans * 100) if finished_scans else 0.0
+    today = datetime.now(timezone.utc).date()
+    today_scans = sum(
+        1 for task in tasks
+        if (created := _parse_timestamp(task.get("created_at"))) is not None
+        and created.astimezone(timezone.utc).date() == today
+    )
     durations = []
     for task in tasks:
         started = _parse_timestamp(task.get("created_at"))
@@ -205,6 +246,7 @@ async def get_system_stats():
 
     return {
         "total_scans": total_scans,
+        "today_scans": today_scans,
         "completed_scans": completed_scans,
         "failed_scans": failed_scans,
         "running_scans": running_scans,
@@ -212,8 +254,48 @@ async def get_system_stats():
         "avg_processing_time_sec": round(statistics.mean(durations), 2) if durations else None,
         "redis_online": redis_online,
         "primary_omr_engine": "Audiveris v5.10.0",
-        "recent_tasks": tasks[-5:] if tasks else [],
+        "recent_tasks": [
+            {
+                key: task.get(key)
+                for key in (
+                    "task_id", "title", "status", "error", "created_at",
+                    "completed_at", "failed_at",
+                )
+                if key in task
+            }
+            for task in reversed(tasks[-50:])
+        ],
     }
+
+
+@app.get("/api/v1/apk/status")
+async def get_apk_status():
+    status, payload = await request_apk_builder("GET", "/status")
+    return JSONResponse(status_code=status, content=payload)
+
+
+@app.post("/api/v1/apk/build")
+async def start_apk_build():
+    if not API_KEY or not MELODISCAN_HOST:
+        raise HTTPException(
+            status_code=503,
+            detail="APK generation requires a configured API key and server host.",
+        )
+    status, payload = await request_apk_builder("POST", "/build")
+    return JSONResponse(status_code=status, content=payload)
+
+
+@app.get("/api/v1/apk/build/{build_id}")
+async def get_apk_build_status(build_id: str):
+    try:
+        from uuid import UUID
+
+        normalized_build_id = str(UUID(build_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid APK build ID.") from exc
+    status, payload = await request_apk_builder("GET", f"/build/{normalized_build_id}")
+    return JSONResponse(status_code=status, content=payload)
+
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -345,6 +427,52 @@ async def dashboard():
             color: var(--accent-cyan);
             font-family: monospace;
         }
+        .section-heading, .section-tools, .apk-actions, .service-grid {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .section-heading { margin-bottom: 18px; }
+        .section-heading h2, .card h2 { margin: 0; font-size: 19px; }
+        .section-tools select, .section-tools input, .btn-secondary {
+            color: var(--text);
+            background: var(--surface-elevated);
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            padding: 10px 12px;
+        }
+        .section-tools input { min-width: 180px; }
+        .btn-secondary {
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .btn:disabled, .btn-secondary:disabled { opacity: .55; cursor: wait; transform: none; }
+        .service-grid { justify-content: flex-start; flex-wrap: wrap; margin-top: 16px; }
+        .service { display: flex; align-items: center; gap: 8px; padding: 10px 13px;
+            border: 1px solid var(--border); background: var(--surface-elevated); border-radius: 10px; }
+        .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
+        .dot.online { background: var(--secondary); box-shadow: 0 0 12px rgba(6,214,160,.45); }
+        .dot.offline { background: #ff6577; }
+        .apk-layout { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+        .apk-meta, .muted, .error-text { color: var(--text-muted); font-size: 13px; }
+        .apk-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 16px; }
+        .error-text { color: #ff8795; white-space: pre-wrap; }
+        .status-pill { display: inline-flex; padding: 5px 9px; border-radius: 99px;
+            background: rgba(148,163,184,.12); color: var(--text-muted); font-size: 12px; }
+        .status-pill.success { color: var(--secondary); background: rgba(6,214,160,.12); }
+        .status-pill.failed { color: #ff8795; background: rgba(255,101,119,.12); }
+        .status-pill.running { color: var(--accent-cyan); background: rgba(0,242,254,.1); }
+        .task-error { color: #ff8795; margin-top: 5px; max-width: 420px; white-space: normal; }
+        .last-updated { color: var(--text-muted); font-size: 12px; }
+        @media (max-width: 650px) {
+            body { padding: 18px 12px; }
+            .header, .section-heading, .apk-layout { align-items: flex-start; flex-direction: column; }
+            .section-tools { width: 100%; }
+            .section-tools input { min-width: 0; width: 100%; }
+            th, td { padding: 10px 7px; }
+            table { font-size: 12px; }
+        }
     </style>
 </head>
 <body>
@@ -373,7 +501,7 @@ async def dashboard():
                     <div style="color: var(--text-muted); font-size: 14px;">Tableau de Bord & Statistiques OMR Temps Réel</div>
                 </div>
             </div>
-            <span class="badge" id="server-badge">● SERVEUR CONNECTÉ</span>
+            <span class="badge" id="server-badge">Vérification des services…</span>
         </div>
 
         <div class="grid">
@@ -384,38 +512,107 @@ async def dashboard():
             </div>
 
             <div class="card">
-                <div class="metric-title">Taux de Succès</div>
-                <div class="metric-value" style="color: #00F2FE;" id="stat-rate">100%</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Traitements terminés sans erreur</div>
+                <div class="metric-title">Réussies</div>
+                <div class="metric-value" id="stat-completed">0</div>
+                <div class="muted">Résultats MIDI disponibles</div>
             </div>
 
             <div class="card">
-                <div class="metric-title">Temps Moyen Traitement</div>
+                <div class="metric-title">En échec</div>
+                <div class="metric-value" style="color: #ff8795;" id="stat-failed">0</div>
+                <div class="muted">Reconnaissance ou conversion échouée</div>
+            </div>
+
+            <div class="card">
+                <div class="metric-title">En cours</div>
+                <div class="metric-value" style="color: var(--accent-cyan);" id="stat-running">0</div>
+                <div class="muted">Tâches en attente ou traitement</div>
+            </div>
+
+            <div class="card">
+                <div class="metric-title">Aujourd’hui</div>
+                <div class="metric-value" style="color: var(--primary);" id="stat-today">0</div>
+                <div class="muted">Demandes reçues depuis minuit UTC</div>
+            </div>
+
+            <div class="card">
+                <div class="metric-title">Taux de réussite</div>
+                <div class="metric-value" style="color: #00F2FE;" id="stat-rate">—</div>
+                <div class="muted">Calculé sur les tâches terminées</div>
+            </div>
+
+            <div class="card">
+                <div class="metric-title">Temps moyen</div>
                 <div class="metric-value" style="color: var(--primary);" id="stat-time">—</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Mesuré depuis les tâches terminées</div>
+                <div class="muted">Durée des traitements réussis</div>
             </div>
 
             <div class="card">
                 <div class="metric-title">Redis</div>
-                <div class="metric-value" style="color: #06D6A0;" id="stat-redis">Vérification...</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Stockage des tâches</div>
+                <div class="metric-value" style="color: #06D6A0;" id="stat-redis">—</div>
+                <div class="muted">File et historique des tâches</div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 20px;">
+            <div class="section-heading">
+                <h2>État des services</h2>
+                <span class="last-updated" id="last-updated">Actualisation automatique</span>
+            </div>
+            <div class="service-grid">
+                <div class="service"><span class="dot" id="service-api-dot"></span>API</div>
+                <div class="service"><span class="dot" id="service-redis-dot"></span>Redis</div>
+                <div class="service"><span class="dot" id="service-worker-dot"></span>Worker Celery</div>
+                <div class="service"><span class="dot" id="service-audiveris-dot"></span>Audiveris</div>
+                <div class="service"><span class="dot" id="service-apk_builder-dot"></span>Générateur Android</div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 20px;">
+            <div class="apk-layout">
+                <div>
+                    <h2>Application Android</h2>
+                    <div class="apk-meta" id="apk-status" style="margin-top: 8px;">Vérification de l’APK…</div>
+                    <div class="error-text" id="apk-error" role="status" style="margin-top: 8px;"></div>
+                </div>
+                <div class="apk-actions">
+                    <button class="btn" id="build-apk-button" type="button">Générer l’APK</button>
+                    <a class="btn-secondary" id="download-apk-link" href="/download/app-release.apk"
+                       style="display:none; text-decoration:none;">Télécharger l’APK</a>
+                </div>
+            </div>
+            <div class="muted" style="margin-top: 12px;">
+                La compilation utilise l’adresse HTTPS du serveur, la clé API configurée et sa CA Caddy.
             </div>
         </div>
 
         <div class="card">
-            <h2>📜 Dernières Tâches Numérisées (Live Tasks Feed)</h2>
+            <div class="section-heading">
+                <h2>Historique des numérisations</h2>
+                <div class="section-tools">
+                    <select id="task-filter" aria-label="Filtrer les tâches">
+                        <option value="all">Tous les statuts</option>
+                        <option value="STATUS_COMPLETED">Réussies</option>
+                        <option value="STATUS_FAILED">En échec</option>
+                        <option value="running">En cours</option>
+                    </select>
+                    <input id="task-search" type="search" placeholder="Rechercher un titre ou ID"
+                           aria-label="Rechercher dans les tâches">
+                </div>
+            </div>
             <table>
                 <thead>
                     <tr>
-                        <th>Task ID</th>
-                        <th>Titre Score</th>
-                        <th>Statut OMR</th>
-                        <th>Fichier Synthèse</th>
+                        <th>Tâche</th>
+                        <th>Partition</th>
+                        <th>État</th>
+                        <th>Créée</th>
+                        <th>Résultat</th>
                     </tr>
                 </thead>
                 <tbody id="tasks-table-body">
                     <tr>
-                        <td colspan="4" style="color: var(--text-muted); text-align: center;">Chargement des statistiques...</td>
+                        <td colspan="5" style="color: var(--text-muted); text-align: center;">Chargement des tâches…</td>
                     </tr>
                 </tbody>
             </table>
@@ -423,56 +620,157 @@ async def dashboard():
     </div>
 
     <script>
+        const runningStatuses = new Set([
+            'STATUS_QUEUED', 'STATUS_PROCESSING_IMAGE', 'STATUS_RUNNING_OMR',
+            'STATUS_BUILDING_MUSICXML', 'STATUS_EXPORTING_MIDI'
+        ]);
+        let currentTasks = [];
+
+        async function apiRequest(url, options = {}) {
+            const response = await fetch(url, { cache: 'no-store', ...options });
+            let payload = {};
+            try { payload = await response.json(); } catch (_) {}
+            if (!response.ok) {
+                throw new Error(payload.detail || `Erreur HTTP ${response.status}`);
+            }
+            return payload;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[character]);
+        }
+
+        function formatDate(value) {
+            if (!value) return '—';
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('fr-FR');
+        }
+
+        function renderTasks() {
+            const tbody = document.getElementById('tasks-table-body');
+            const filter = document.getElementById('task-filter').value;
+            const query = document.getElementById('task-search').value.trim().toLocaleLowerCase();
+            const tasks = currentTasks.filter(task => {
+                const statusMatch = filter === 'all' ||
+                    (filter === 'running' ? runningStatuses.has(task.status) : task.status === filter);
+                const searchMatch = !query ||
+                    `${task.title || ''} ${task.task_id || ''}`.toLocaleLowerCase().includes(query);
+                return statusMatch && searchMatch;
+            });
+            if (!tasks.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;">Aucune tâche pour ces filtres.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = tasks.map(task => {
+                const failed = task.status === 'STATUS_FAILED';
+                const completed = task.status === 'STATUS_COMPLETED';
+                const running = runningStatuses.has(task.status);
+                const className = failed ? 'failed' : completed ? 'success' : running ? 'running' : '';
+                const statusLabel = failed ? 'Échec' : completed ? 'Terminée' :
+                    running ? 'En cours' : (task.status || 'Inconnue');
+                const result = completed
+                    ? `<a href="/api/v1/result/${encodeURIComponent(task.task_id)}">Télécharger MIDI</a>`
+                    : '—';
+                return `<tr>
+                    <td><code>${escapeHtml((task.task_id || '').slice(0, 12))}</code></td>
+                    <td><strong>${escapeHtml(task.title || 'Partition sans titre')}</strong></td>
+                    <td><span class="status-pill ${className}">${escapeHtml(statusLabel)}</span>
+                        ${failed && task.error ? `<div class="task-error">${escapeHtml(task.error)}</div>` : ''}</td>
+                    <td>${escapeHtml(formatDate(task.created_at))}</td>
+                    <td>${result}</td>
+                </tr>`;
+            }).join('');
+        }
+
         async function fetchStats() {
             try {
-                const res = await fetch('/api/v1/stats');
-                if (!res.ok) throw new Error('Impossible de charger les statistiques.');
-                const data = await res.json();
-
+                const data = await apiRequest('/api/v1/stats');
                 document.getElementById('stat-total').innerText = data.total_scans;
+                document.getElementById('stat-completed').innerText = data.completed_scans;
+                document.getElementById('stat-failed').innerText = data.failed_scans;
+                document.getElementById('stat-running').innerText = data.running_scans;
+                document.getElementById('stat-today').innerText = data.today_scans;
                 document.getElementById('stat-rate').innerText = data.success_rate + '%';
                 document.getElementById('stat-time').innerText =
-                    data.avg_processing_time_sec == null ? '—' : data.avg_processing_time_sec + 's';
+                    data.avg_processing_time_sec == null ? '—' : `${data.avg_processing_time_sec}s`;
                 document.getElementById('stat-redis').innerText = data.redis_online ? 'En ligne' : 'Indisponible';
-
-                const tbody = document.getElementById('tasks-table-body');
-                if (data.recent_tasks && data.recent_tasks.length > 0) {
-                    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
-                        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-                    })[character]);
-                    tbody.innerHTML = data.recent_tasks.map(t => `
-                        <tr>
-                            <td><code>${escapeHtml((t.task_id || '').substring(0, 12))}...</code></td>
-                            <td><strong>${escapeHtml(t.title || 'Untitled')}</strong></td>
-                            <td><span class="badge">${escapeHtml(t.status)}</span>${t.error ? `<div>${escapeHtml(t.error)}</div>` : ''}</td>
-                            <td>${t.status === 'STATUS_COMPLETED'
-                                ? `<a href="/api/v1/result/${encodeURIComponent(t.task_id)}" style="color: #00F2FE;">Télécharger MIDI</a>`
-                                : '—'}</td>
-                        </tr>
-                    `).join('');
-                } else {
-                    tbody.innerHTML = '<tr><td colspan="4" style="color: var(--text-muted); text-align: center;">Aucune tâche en cours pour le moment. Envoyez une partition via l&apos;application mobile.</td></tr>';
-                }
+                currentTasks = data.recent_tasks || [];
+                renderTasks();
+                document.getElementById('last-updated').innerText =
+                    `Mis à jour à ${new Date().toLocaleTimeString('fr-FR')}`;
             } catch (e) {
-                console.error('Stats update error', e);
+                document.getElementById('last-updated').innerText = `Statistiques indisponibles : ${e.message}`;
             }
         }
 
         async function fetchHealth() {
             const badge = document.getElementById('server-badge');
             try {
-                const response = await fetch('/health');
+                const response = await fetch('/health', { cache: 'no-store' });
                 const data = await response.json();
-                badge.innerText = data.status === 'ok' ? '● SERVICES DISPONIBLES' : '● SERVICE DÉGRADÉ';
-            } catch (_) {
-                badge.innerText = '● SERVEUR INDISPONIBLE';
+                const dependencies = data.dependencies || {};
+                for (const service of ['redis', 'celery_worker', 'audiveris', 'apk_builder']) {
+                    const indicator = document.getElementById(`service-${service}-dot`);
+                    indicator.className = `dot ${dependencies[service] ? 'online' : 'offline'}`;
+                }
+                document.getElementById('service-api-dot').className =
+                    response.ok ? 'dot online' : 'dot offline';
+                badge.innerText = data.status === 'ok' ? 'Tous les services opérationnels' : 'Service dégradé';
+                badge.style.color = data.status === 'ok' ? 'var(--secondary)' : '#ff8795';
+            } catch (error) {
+                badge.innerText = `API indisponible : ${error.message}`;
+                badge.style.color = '#ff8795';
             }
         }
 
+        function renderApk(data) {
+            const apk = data.apk || {};
+            const building = data.status === 'building';
+            const button = document.getElementById('build-apk-button');
+            const download = document.getElementById('download-apk-link');
+            const detail = apk.available
+                ? `APK réel prêt · ${(apk.size_bytes / 1048576).toFixed(1)} Mio · généré le ${formatDate(apk.generated_at)} · SHA-256 ${escapeHtml((apk.sha256 || '').slice(0, 16))}…`
+                : 'Aucun APK généré sur ce serveur.';
+            document.getElementById('apk-status').innerText =
+                building ? `${data.progress || 'Génération en cours…'} · ${detail}` : detail;
+            document.getElementById('apk-error').textContent = data.status === 'failed' ? (data.error || 'Échec de compilation.') : '';
+            button.disabled = building;
+            button.innerText = building ? 'Génération en cours…' : 'Générer l’APK';
+            download.style.display = apk.available ? 'inline-flex' : 'none';
+        }
+
+        async function fetchApkStatus() {
+            try {
+                renderApk(await apiRequest('/api/v1/apk/status'));
+            } catch (error) {
+                document.getElementById('apk-status').innerText = `Générateur indisponible : ${error.message}`;
+                document.getElementById('build-apk-button').disabled = false;
+            }
+        }
+
+        async function startApkBuild() {
+            const button = document.getElementById('build-apk-button');
+            button.disabled = true;
+            document.getElementById('apk-error').textContent = '';
+            try {
+                await apiRequest('/api/v1/apk/build', { method: 'POST' });
+            } catch (error) {
+                document.getElementById('apk-error').textContent = error.message;
+            }
+            await fetchApkStatus();
+        }
+
+        document.getElementById('build-apk-button').addEventListener('click', startApkBuild);
+        document.getElementById('task-filter').addEventListener('change', renderTasks);
+        document.getElementById('task-search').addEventListener('input', renderTasks);
         fetchStats();
         fetchHealth();
-        setInterval(fetchStats, 3000);
-        setInterval(fetchHealth, 5000);
+        fetchApkStatus();
+        setInterval(fetchStats, 5000);
+        setInterval(fetchHealth, 10000);
+        setInterval(fetchApkStatus, 3000);
     </script>
 </body>
 </html>"""

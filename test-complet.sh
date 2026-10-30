@@ -54,10 +54,18 @@ run_check() {
 }
 
 run_flutter() {
-  (
-    cd mobile || exit 1
-    "$FLUTTER_BIN" "$@"
-  )
+  if [[ "$FLUTTER_MODE" == "container-exec" ]]; then
+    docker compose "${COMPOSE_ENV_ARGS[@]}" exec -T --workdir /workspace/mobile \
+      melodiscan-apk-builder flutter "$@"
+  elif [[ "$FLUTTER_MODE" == "container-run" ]]; then
+    docker compose "${COMPOSE_ENV_ARGS[@]}" run --build --rm --no-deps \
+      --workdir /workspace/mobile --entrypoint flutter melodiscan-apk-builder "$@"
+  elif [[ "$FLUTTER_MODE" == "host" ]]; then
+    (
+      cd mobile || exit 1
+      "$FLUTTER_BIN" "$@"
+    )
+  fi
 }
 
 printf 'MelodiScan — validation complète\n'
@@ -95,69 +103,35 @@ else
 fi
 
 FLUTTER_BIN=""
-if command -v flutter >/dev/null 2>&1; then
+FLUTTER_MODE=""
+if [[ "$DOCKER_READY" -eq 1 ]]; then
+  if docker compose "${COMPOSE_ENV_ARGS[@]}" ps --status running --services 2>/dev/null |
+    grep -Fxq "melodiscan-apk-builder"; then
+    FLUTTER_MODE="container-exec"
+  else
+    FLUTTER_MODE="container-run"
+  fi
+elif command -v flutter >/dev/null 2>&1; then
   FLUTTER_BIN="$(command -v flutter)"
 elif [[ -x "$HOME/.local/share/flutter/bin/flutter" ]]; then
   FLUTTER_BIN="$HOME/.local/share/flutter/bin/flutter"
 fi
+if [[ -n "$FLUTTER_BIN" && -z "$FLUTTER_MODE" ]]; then
+  FLUTTER_MODE="host"
+fi
 
-if [[ -n "$FLUTTER_BIN" ]]; then
+if [[ -n "$FLUTTER_MODE" ]]; then
+  run_check "dépendances Flutter verrouillées" run_flutter pub get --enforce-lockfile
   run_check "analyse statique Flutter" run_flutter analyze --no-pub --no-fatal-infos
   run_check "tests Flutter" run_flutter test --no-pub --reporter expanded
-
-  API_KEY_VALUE="$(sed -n 's/^API_KEY=//p' "$ENV_FILE" 2>/dev/null | tail -n 1)"
-  HOST_VALUE="$(sed -n 's/^MELODISCAN_HOST=//p' "$ENV_FILE" 2>/dev/null | tail -n 1)"
-  CERT_FILE="${MELODISCAN_TEST_CERT_FILE:-$ROOT/data/caddy-root.crt}"
-  if [[ -n "$API_KEY_VALUE" && -n "$HOST_VALUE" && -s "$CERT_FILE" ]]; then
-    CA_BASE64="$(base64 <"$CERT_FILE" | tr -d '\n')"
-    APK_BUILD_LOG="$(mktemp)"
-    printf '\n== Compilation APK release préconfiguré ==\n'
-    if (
-      cd mobile &&
-      "$FLUTTER_BIN" pub get &&
-      "$FLUTTER_BIN" build apk --release \
-        --dart-define="MELODISCAN_API_URL=https://${HOST_VALUE}" \
-        --dart-define="MELODISCAN_API_KEY=${API_KEY_VALUE}" \
-        --dart-define="MELODISCAN_ROOT_CA_BASE64=${CA_BASE64}"
-    ) >"$APK_BUILD_LOG" 2>&1; then
-      APK_SOURCE="mobile/build/app/outputs/flutter-apk/app-release.apk"
-      if [[ -s "$APK_SOURCE" ]]; then
-        mkdir -p data/apk
-        if install -m 0644 "$APK_SOURCE" data/apk/app-release.apk; then
-          pass "Compilation APK release préconfiguré et publication pour téléchargement"
-          ANDROID_SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
-          APK_SIGNER=""
-          for candidate in "$ANDROID_SDK"/build-tools/*/apksigner; do
-            if [[ -x "$candidate" ]]; then APK_SIGNER="$candidate"; fi
-          done
-          if [[ -n "$APK_SIGNER" ]]; then
-            run_check "signature APK Android" "$APK_SIGNER" verify --verbose "$APK_SOURCE"
-          else
-            skip "apksigner introuvable : signature cryptographique de l’APK non vérifiée."
-            BLOCKED=1
-          fi
-        else
-          fail "Copie de l’APK compilé dans data/apk" "$APK_BUILD_LOG"
-        fi
-      else
-        fail "Compilation APK release (artefact absent)" "$APK_BUILD_LOG"
-      fi
-    else
-      fail "Compilation APK release préconfiguré" "$APK_BUILD_LOG"
-    fi
-    rm -f "$APK_BUILD_LOG"
-  else
-    skip "Compilation APK de déploiement omise : .env ou data/caddy-root.crt incomplet."
-    BLOCKED=1
-  fi
 else
-  skip "Flutter indisponible : analyse, tests Flutter et compilation APK omis."
+  skip "Flutter hôte absent et conteneur générateur arrêté : analyse/tests Flutter omis."
   BLOCKED=1
 fi
 
 if [[ "$DOCKER_READY" -eq 1 && "$BACKEND_TESTS_OK" -eq 1 ]]; then
   running_services="$(docker compose "${COMPOSE_ENV_ARGS[@]}" ps --status running --services 2>/dev/null || true)"
-  required_services=(melodiscan-api melodiscan-worker melodiscan-redis melodiscan-https)
+  required_services=(melodiscan-api melodiscan-worker melodiscan-redis melodiscan-https melodiscan-apk-builder)
   missing_services=()
   for service in "${required_services[@]}"; do
     if ! grep -Fxq "$service" <<<"$running_services"; then
@@ -165,7 +139,7 @@ if [[ "$DOCKER_READY" -eq 1 && "$BACKEND_TESTS_OK" -eq 1 ]]; then
     fi
   done
   if [[ "${#missing_services[@]}" -eq 0 ]]; then
-    run_check "API, HTTPS, auth, APK distribué et worker OMR (E2E)" \
+    run_check "API, HTTPS, auth, génération et signature APK, distribution et worker OMR (E2E)" \
       python3 scripts/test-e2e.py
   else
     skip "Stack pas entièrement démarrée (${missing_services[*]}) : tests E2E non exécutés."

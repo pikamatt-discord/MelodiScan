@@ -11,6 +11,8 @@ services:
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
       - AUDIVERIS_EXECUTABLE=${AUDIVERIS_EXECUTABLE:-audiveris}
+      - APK_BUILDER_URL=http://melodiscan-apk-builder:8090
+      - MELODISCAN_HOST=${MELODISCAN_HOST:-}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-20971520}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
       - API_KEY=${API_KEY:-}
@@ -21,6 +23,7 @@ services:
       - ./data/apk:/app/data/apk:ro
     depends_on:
       - melodiscan-redis
+      - melodiscan-apk-builder
 
   melodiscan-worker:
     build:
@@ -37,6 +40,24 @@ services:
       - ./data/temp:/app/data/temp
     depends_on:
       - melodiscan-redis
+
+  melodiscan-apk-builder:
+    build:
+      context: .
+      dockerfile: apk-builder/Dockerfile
+    image: melodiscan/apk-builder:latest
+    container_name: melodiscan_apk_builder
+    restart: always
+    environment:
+      - API_KEY=${API_KEY:-}
+      - MELODISCAN_HOST=${MELODISCAN_HOST:-}
+      - MELODISCAN_CA_PATH=/run/secrets/caddy-root.crt
+    volumes:
+      - ./mobile:/workspace/mobile
+      - ./data/apk:/output
+      - ./data/caddy-root.crt:/run/secrets/caddy-root.crt:ro
+      - apk_builder_pub_cache:/root/.pub-cache
+      - apk_builder_gradle_cache:/root/.gradle
 
   melodiscan-redis:
     image: redis:7-alpine
@@ -69,7 +90,10 @@ services:
     entrypoint: ["python", "-m", "pytest", "-q", "/app/tests"]
     volumes:
       - ./backend/tests:/app/tests:ro
+      - ./scripts/apk-builder-service.py:/scripts/apk-builder-service.py:ro
 
 volumes:
   caddy_data:
   caddy_config:
+  apk_builder_pub_cache:
+  apk_builder_gradle_cache:
