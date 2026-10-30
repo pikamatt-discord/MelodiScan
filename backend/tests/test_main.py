@@ -5,6 +5,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -313,6 +314,57 @@ def test_omr_engine_passes_pdf_document_to_audiveris(tmp_path, monkeypatch):
     assert calls[0][-1] == str(pdf_path)
     assert "-batch" in calls[0]
     assert "-export" in calls[0]
+
+
+def test_omr_engine_converts_audiveris_mxl_export_to_musicxml(tmp_path, monkeypatch):
+    output_mxl = tmp_path / "score.mxl"
+    output_musicxml = tmp_path / "score.musicxml"
+    musicxml = b'<?xml version="1.0"?><score-partwise><part-list/></score-partwise>'
+    container = (
+        b'<?xml version="1.0"?><container><rootfiles>'
+        b'<rootfile full-path="scores/score.xml" '
+        b'media-type="application/vnd.recordare.musicxml+xml"/>'
+        b"</rootfiles></container>"
+    )
+
+    class ProcessResult:
+        returncode = 0
+        stderr = b""
+        stdout = b"Score exported to score.mxl"
+
+    def run(_command, **_kwargs):
+        with ZipFile(output_mxl, "w", ZIP_DEFLATED) as archive:
+            archive.writestr("META-INF/container.xml", container)
+            archive.writestr("scores/score.xml", musicxml)
+        return ProcessResult()
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
+
+    result = OMREngine().process_score(
+        str(tmp_path / "score.png"), str(tmp_path)
+    )
+
+    assert result == str(output_musicxml)
+    assert output_musicxml.read_bytes() == musicxml
+
+
+def test_omr_engine_rejects_mxl_without_musicxml_container(tmp_path, monkeypatch):
+    output_mxl = tmp_path / "score.mxl"
+
+    class ProcessResult:
+        returncode = 0
+        stderr = b""
+        stdout = b"Score exported to score.mxl"
+
+    def run(_command, **_kwargs):
+        with ZipFile(output_mxl, "w", ZIP_DEFLATED) as archive:
+            archive.writestr("score.xml", "<score-partwise/>")
+        return ProcessResult()
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
+
+    with pytest.raises(OMRProcessingError, match="Could not read MusicXML from Audiveris MXL export"):
+        OMREngine().process_score(str(tmp_path / "score.png"), str(tmp_path))
 
 
 def test_omr_engine_includes_audiveris_output_when_musicxml_is_missing(

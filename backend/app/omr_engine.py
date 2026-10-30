@@ -1,5 +1,7 @@
 import os
 import subprocess
+import zipfile
+from xml.etree import ElementTree
 
 
 class OMRProcessingError(RuntimeError):
@@ -64,6 +66,39 @@ class OMREngine:
             raise OMRProcessingError(
                 f"Audiveris failed with exit code {res.returncode}.", output
             )
+        output_mxl = os.path.join(output_dir, f"{base_name}.mxl")
+        if os.path.isfile(output_mxl) and os.path.getsize(output_mxl) > 0:
+            try:
+                with zipfile.ZipFile(output_mxl) as archive:
+                    container = ElementTree.fromstring(
+                        archive.read("META-INF/container.xml")
+                    )
+                    rootfile = next(
+                        (
+                            element
+                            for element in container.iter()
+                            if element.tag.rsplit("}", 1)[-1] == "rootfile"
+                        ),
+                        None,
+                    )
+                    musicxml_entry = rootfile.get("full-path") if rootfile is not None else None
+                    if not musicxml_entry:
+                        raise OMRProcessingError(
+                            "Audiveris exported an MXL file without a MusicXML rootfile."
+                        )
+                    musicxml_content = archive.read(musicxml_entry)
+                if not musicxml_content:
+                    raise OMRProcessingError(
+                        "Audiveris exported an empty MusicXML document inside the MXL file."
+                    )
+                with open(output_musicxml, "wb") as musicxml_file:
+                    musicxml_file.write(musicxml_content)
+                return output_musicxml
+            except (zipfile.BadZipFile, KeyError, ElementTree.ParseError, OSError) as exc:
+                raise OMRProcessingError(
+                    f"Could not read MusicXML from Audiveris MXL export '{output_mxl}': {exc}",
+                    output,
+                ) from exc
         if not os.path.isfile(output_musicxml) or os.path.getsize(output_musicxml) == 0:
             raise OMRProcessingError(
                 "Audiveris completed without producing a non-empty MusicXML file "
