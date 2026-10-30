@@ -15,6 +15,7 @@ from app.omr_engine import OMRProcessingError, OMREngine, convert_musicxml_to_mi
 
 client = TestClient(app)
 PNG_BYTES = b"\x89PNG\r\n\x1a\nvalid-test-png"
+PDF_BYTES = b"%PDF-1.7\nvalid-test-pdf"
 
 
 @pytest.fixture(autouse=True)
@@ -90,6 +91,23 @@ def test_scan_score_queues_valid_image(monkeypatch):
     task = get_task_state(data["task_id"])
     assert task["title"] == "Test Piece"
     assert Path(task["file_path"]).read_bytes() == PNG_BYTES
+
+
+def test_scan_score_queues_pdf_document(monkeypatch):
+    from app.tasks import process_omr_task
+
+    monkeypatch.setattr(process_omr_task, "delay", lambda *args: None)
+    response = client.post(
+        "/api/v1/scan",
+        files={"file": ("score.pdf", PDF_BYTES, "application/pdf")},
+        data={"title": "PDF Score"},
+    )
+
+    assert response.status_code == 200
+    task = get_task_state(response.json()["task_id"])
+    assert task["title"] == "PDF Score"
+    assert task["file_path"].endswith(".pdf")
+    assert Path(task["file_path"]).read_bytes() == PDF_BYTES
 
 
 def test_api_key_is_required_only_when_configured(monkeypatch):
@@ -183,6 +201,15 @@ def test_scan_rejects_non_image_upload():
     assert response.status_code == 415
 
 
+def test_scan_rejects_pdf_without_pdf_signature():
+    response = client.post(
+        "/api/v1/scan",
+        files={"file": ("score.pdf", b"not a PDF", "application/pdf")},
+    )
+
+    assert response.status_code == 415
+
+
 def test_scan_rejects_oversized_upload(monkeypatch):
     monkeypatch.setattr(main, "MAX_UPLOAD_BYTES", 8)
     response = client.post(
@@ -227,6 +254,32 @@ def test_omr_engine_reports_audiveris_failure(tmp_path, monkeypatch):
         OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
 
 
+def test_omr_engine_passes_pdf_document_to_audiveris(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(PDF_BYTES)
+    output_path = tmp_path / "score.musicxml"
+    calls = []
+
+    class ProcessResult:
+        returncode = 0
+        stderr = b""
+        stdout = b""
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        output_path.write_text("<score-partwise/>")
+        return ProcessResult()
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
+
+    result = OMREngine().process_score(str(pdf_path), str(tmp_path))
+
+    assert result == str(output_path)
+    assert calls[0][-1] == str(pdf_path)
+    assert "-batch" in calls[0]
+    assert "-export" in calls[0]
+
+
 def test_omr_engine_includes_stdout_when_audiveris_stderr_is_empty(tmp_path, monkeypatch):
     class ProcessResult:
         returncode = 1
@@ -269,7 +322,7 @@ def test_worker_persists_processing_error(tmp_path, monkeypatch):
     def fail_processing(*_args):
         raise OMRProcessingError("Audiveris unavailable")
 
-    monkeypatch.setattr("app.tasks.OMREngine.process_image", fail_processing)
+    monkeypatch.setattr("app.tasks.OMREngine.process_score", fail_processing)
 
     with pytest.raises(OMRProcessingError, match="Audiveris unavailable"):
         process_omr_task.run("failed-worker-task", str(tmp_path / "score.png"), "Test")

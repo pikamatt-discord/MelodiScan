@@ -39,7 +39,7 @@
   </svg>
 </p>
 
-**MelodiScan** est un prototype open-source et auto-hébergeable qui envoie une image de partition à un serveur OMR, suit le traitement et récupère un résultat MIDI quand la reconnaissance et la conversion aboutissent. Il ne simule pas de résultat lorsque le traitement échoue.
+**MelodiScan** est un prototype open-source et auto-hébergeable qui envoie une image ou un document PDF de partition à un serveur OMR, suit le traitement et récupère un résultat MIDI quand la reconnaissance et la conversion aboutissent. Il ne simule pas de résultat lorsque le traitement échoue.
 
 Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 
@@ -51,10 +51,10 @@ Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 
 | Composant | Statut | Fonctionnalités Déployées |
 | :--- | :--- | :--- |
-| **API Backend (FastAPI)** | Prototype | Envoi d’une image par tâche, suivi SSE, téléchargement MIDI uniquement après succès, statistiques et état de santé des dépendances. |
+| **API Backend (FastAPI)** | Prototype | Envoi d’une image ou d’un PDF par tâche, suivi SSE, téléchargement MIDI uniquement après succès, statistiques et état de santé des dépendances. |
 | **Moteur OMR** | Intégré à l’image | Audiveris 5.10.0 est installé dans l’image Docker du backend/worker. Toute erreur OMR ou de conversion marque la tâche en échec ; aucun moteur de secours ni partition synthétique. |
 | **Dashboard serveur** | Opérationnel | Statistiques de numérisation, état API/Redis/worker/Audiveris/générateur APK, historique filtrable, téléchargement MIDI et génération réelle d’un APK Release à la demande. |
-| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image unique, envoi au serveur, suivi SSE et vérification/récupération du fichier MIDI. La lecture audio intégrée, le multi-pages et le prétraitement d’image ne sont pas implémentés. |
+| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, envoi au serveur, suivi SSE et vérification/récupération du fichier MIDI. La lecture audio intégrée et le prétraitement d’image ne sont pas implémentés. |
 | **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Audiveris. |
 | **Tests automatisés** | En cours | Tests ciblés backend et Flutter ; exécuter les commandes de test ci-dessous dans des environnements munis de leurs dépendances. |
 
@@ -130,7 +130,7 @@ L’API sur le port 8080 reste accessible uniquement depuis la machine hôte pou
 
 Hors installateur, les endpoints `/api/*` et `/download/*` acceptent une clé `API_KEY`; le dashboard peut être protégé avec `DASHBOARD_USERNAME` et `DASHBOARD_PASSWORD`. Sans configuration, l’authentification est désactivée pour le développement local ; n’exposez pas ce mode sur Internet. Le client Flutter de développement utilise `http://10.0.2.2:8080` par défaut. Pour une compilation personnalisée, définissez `MELODISCAN_API_URL`, `MELODISCAN_API_KEY` et `MELODISCAN_ROOT_CA_BASE64` avec `--dart-define`.
 
-L’endpoint `POST /api/v1/scan` accepte une seule image PNG, JPEG ou WebP, jusqu’à 20 Mio par défaut. Chaque image doit être envoyée dans une tâche séparée.
+L’endpoint `POST /api/v1/scan` accepte une image PNG, JPEG ou WebP, ou un document PDF, jusqu’à 20 Mio par défaut. Un PDF est traité comme un seul document par Audiveris, qui peut reconnaître les partitions sur plusieurs pages ; les images sont toujours envoyées une par tâche. Les échecs de reconnaissance restent explicites.
 
 ---
 

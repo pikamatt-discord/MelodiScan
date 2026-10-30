@@ -35,7 +35,7 @@ void main() {
   });
 
   testWidgets(
-      'StatusScreen displays server processing errors without simulating completion',
+      'StatusScreen displays concise processing errors without simulating completion',
       (tester) async {
     final client = MockClient((_) async => http.Response(
           'data: {"task_id":"task-2","status":"STATUS_FAILED","error":"Audiveris unavailable"}\n\n',
@@ -57,7 +57,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Audiveris unavailable'), findsOneWidget);
+    expect(
+      find.text(
+          'Le traitement a échoué. Consultez les diagnostics dans le dashboard.'),
+      findsOneWidget,
+    );
     expect(find.text('ÉCHEC'), findsOneWidget);
     expect(find.text('Voir le résultat MIDI'), findsNothing);
   });

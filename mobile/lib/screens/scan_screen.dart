@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
@@ -22,7 +23,9 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   bool _isUploading = false;
-  XFile? _selectedImage;
+  XFile? _selectedFile;
+  String? _selectedFileName;
+  bool _selectedFileIsPdf = false;
   final ImagePicker _picker = ImagePicker();
   final TextEditingController _titleController =
       TextEditingController(text: 'Ma Partition Numérisée');
@@ -55,7 +58,9 @@ class _ScanScreenState extends State<ScanScreen> {
       final image = await _picker.pickImage(source: source);
       if (mounted && image != null) {
         setState(() {
-          _selectedImage = image;
+          _selectedFile = image;
+          _selectedFileName = image.name;
+          _selectedFileIsPdf = false;
         });
       }
     } catch (error) {
@@ -63,11 +68,29 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
+  Future<void> _selectPdf() async {
+    try {
+      final pdf = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: const ['pdf'],
+      );
+      if (pdf == null || !mounted) return;
+
+      setState(() {
+        _selectedFile = pdf.xFile;
+        _selectedFileName = pdf.name;
+        _selectedFileIsPdf = true;
+      });
+    } catch (error) {
+      _showError('Impossible de sélectionner le PDF : $error');
+    }
+  }
+
   Future<void> _uploadAndProcess() async {
-    final image = _selectedImage;
-    if (image == null) {
-      _showError(
-          'Sélectionnez une image de partition avant de lancer le scan.');
+    final file = _selectedFile;
+    final fileName = _selectedFileName;
+    if (file == null || fileName == null) {
+      _showError('Sélectionnez une image ou un PDF avant de lancer le scan.');
       return;
     }
 
@@ -99,9 +122,9 @@ class _ScanScreenState extends State<ScanScreen> {
       request.files.add(
         http.MultipartFile(
           'file',
-          http.ByteStream(image.openRead()),
-          await image.length(),
-          filename: image.name,
+          http.ByteStream(file.openRead()),
+          await file.length(),
+          filename: fileName,
         ),
       );
 
@@ -160,7 +183,7 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasImage = _selectedImage != null;
+    final hasFile = _selectedFile != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -196,7 +219,7 @@ class _ScanScreenState extends State<ScanScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Reconnaissance OMR d’une image de partition',
+                            'Reconnaissance OMR d’une image ou d’un PDF',
                             style: TextStyle(
                                 color: Colors.grey.shade400, fontSize: 12),
                           ),
@@ -251,7 +274,9 @@ class _ScanScreenState extends State<ScanScreen> {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _selectImage(ImageSource.camera),
+                    onPressed: _isUploading
+                        ? null
+                        : () => _selectImage(ImageSource.camera),
                     icon: const Icon(Icons.camera_alt_rounded),
                     label: const Text('Prendre en photo'),
                     style: ElevatedButton.styleFrom(
@@ -264,7 +289,9 @@ class _ScanScreenState extends State<ScanScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _selectImage(ImageSource.gallery),
+                    onPressed: _isUploading
+                        ? null
+                        : () => _selectImage(ImageSource.gallery),
                     icon: const Icon(Icons.photo_library_rounded),
                     label: const Text('Choisir une image'),
                     style: ElevatedButton.styleFrom(
@@ -276,17 +303,36 @@ class _ScanScreenState extends State<ScanScreen> {
                 ),
               ],
             ),
-            if (hasImage) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _isUploading ? null : _selectPdf,
+              icon: const Icon(Icons.picture_as_pdf_rounded),
+              label: const Text('Importer un PDF'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+            if (hasFile) ...[
               const SizedBox(height: 16),
               Card(
                 child: ListTile(
-                  leading: const Icon(Icons.image_rounded),
-                  title: Text(_selectedImage!.name,
+                  leading: Icon(_selectedFileIsPdf
+                      ? Icons.picture_as_pdf_rounded
+                      : Icons.image_rounded),
+                  title: Text(_selectedFileName!,
                       maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: const Text('Une image par traitement'),
+                  subtitle: Text(_selectedFileIsPdf
+                      ? 'Document PDF complet'
+                      : 'Une image par traitement'),
                   trailing: IconButton(
-                    tooltip: 'Retirer l’image',
-                    onPressed: () => setState(() => _selectedImage = null),
+                    tooltip: 'Retirer le fichier',
+                    onPressed: _isUploading
+                        ? null
+                        : () => setState(() {
+                              _selectedFile = null;
+                              _selectedFileName = null;
+                              _selectedFileIsPdf = false;
+                            }),
                     icon: const Icon(Icons.close),
                   ),
                 ),
@@ -322,17 +368,21 @@ class _ScanScreenState extends State<ScanScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          hasImage
-                              ? Icons.document_scanner
+                          hasFile
+                              ? _selectedFileIsPdf
+                                  ? Icons.picture_as_pdf_rounded
+                                  : Icons.document_scanner
                               : Icons.photo_size_select_actual_rounded,
                           size: 52,
                           color: theme.colorScheme.primary,
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          hasImage
-                              ? 'Image prête à être envoyée'
-                              : 'Aucune image sélectionnée',
+                          hasFile
+                              ? _selectedFileIsPdf
+                                  ? 'PDF prêt à être envoyé'
+                                  : 'Image prête à être envoyée'
+                              : 'Aucun fichier sélectionné',
                           style: const TextStyle(
                               color: Colors.white, fontWeight: FontWeight.bold),
                         ),
@@ -361,7 +411,7 @@ class _ScanScreenState extends State<ScanScreen> {
                           children: [
                             CircularProgressIndicator(),
                             SizedBox(height: 16),
-                            Text('Envoi de l’image au serveur...',
+                            Text('Envoi du document au serveur...',
                                 style: TextStyle(color: Colors.white)),
                           ],
                         ),
@@ -372,7 +422,7 @@ class _ScanScreenState extends State<ScanScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: _isUploading || !hasImage ? null : _uploadAndProcess,
+              onPressed: _isUploading || !hasFile ? null : _uploadAndProcess,
               icon: const Icon(Icons.rocket_launch_rounded),
               label: Text(_isUploading
                   ? 'Transfert en cours...'

@@ -16,10 +16,12 @@ void main() {
     expect(find.text('MelodiScan Scanner'), findsOneWidget);
     expect(find.text('Prendre en photo'), findsOneWidget);
     expect(find.text('Choisir une image'), findsOneWidget);
+    expect(find.text('Importer un PDF'), findsOneWidget);
     expect(find.text('Une image par traitement'), findsNothing);
     expect(find.text('Binarisation Sauvola'), findsNothing);
     expect(find.text('Galerie (Multi)'), findsNothing);
 
+    expect(find.text('Aucun fichier sélectionné'), findsOneWidget);
     expect(find.text('Lancer la reconnaissance OMR'), findsOneWidget);
     final buttons = tester.widgetList<ElevatedButton>(
       find.byWidgetPredicate((widget) => widget is ElevatedButton),

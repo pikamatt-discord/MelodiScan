@@ -847,9 +847,9 @@ async def scan_score(
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     await file.close()
     if not content:
-        raise HTTPException(status_code=400, detail="The uploaded image is empty.")
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
     if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"Image exceeds the {MAX_UPLOAD_BYTES}-byte upload limit.")
+        raise HTTPException(status_code=413, detail=f"File exceeds the {MAX_UPLOAD_BYTES}-byte upload limit.")
 
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
         extension = ".png"
@@ -857,8 +857,13 @@ async def scan_score(
         extension = ".jpg"
     elif len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
         extension = ".webp"
+    elif content.startswith(b"%PDF-"):
+        extension = ".pdf"
     else:
-        raise HTTPException(status_code=415, detail="Only valid PNG, JPEG, or WebP images are supported.")
+        raise HTTPException(
+            status_code=415,
+            detail="Only valid PNG, JPEG, WebP images, or PDF documents are supported.",
+        )
 
     import uuid
     task_id = str(uuid.uuid4())

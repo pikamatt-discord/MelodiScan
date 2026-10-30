@@ -15,7 +15,7 @@ celery_app = Celery(
 logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.process_omr_task")
-def process_omr_task(task_id: str, image_path: str, title: str) -> dict:
+def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
     from app.main import TASK_FAILURE_SUMMARY, get_task_state, set_task_state
 
     output_dir = "data/temp"
@@ -33,7 +33,7 @@ def process_omr_task(task_id: str, image_path: str, title: str) -> dict:
         set_task_state(task_id, state)
         musicxml_path = OMREngine(
             executable=os.getenv("AUDIVERIS_EXECUTABLE", "audiveris")
-        ).process_image(image_path, output_dir)
+        ).process_score(score_path, output_dir)
 
         state["status"] = "STATUS_BUILDING_MUSICXML"
         set_task_state(task_id, state)
@@ -64,8 +64,8 @@ def process_omr_task(task_id: str, image_path: str, title: str) -> dict:
         raise
     finally:
         try:
-            os.remove(image_path)
+            os.remove(score_path)
         except FileNotFoundError:
             pass
         except OSError:
-            logger.exception("Could not remove uploaded image for task %s.", task_id)
+            logger.exception("Could not remove uploaded score file for task %s.", task_id)

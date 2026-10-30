@@ -24,20 +24,20 @@ class OMREngine:
     def __init__(self, executable: str = "audiveris"):
         self.executable = executable
 
-    def process_image(self, image_path: str, output_dir: str) -> str:
+    def process_score(self, score_path: str, output_dir: str) -> str:
         os.makedirs(output_dir, exist_ok=True)
-        base_name = os.path.splitext(os.path.basename(image_path))[0]
+        base_name = os.path.splitext(os.path.basename(score_path))[0]
         output_musicxml = os.path.join(output_dir, f"{base_name}.musicxml")
 
         try:
-            cmd = [self.executable, "-batch", "-export", "-output", output_dir, image_path]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            cmd = [self.executable, "-batch", "-export", "-output", output_dir, score_path]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
         except FileNotFoundError as exc:
             raise OMRProcessingError(
                 f"Audiveris executable '{self.executable}' is not installed or not on PATH."
             ) from exc
         except subprocess.TimeoutExpired as exc:
-            raise OMRProcessingError("Audiveris timed out after 60 seconds.") from exc
+            raise OMRProcessingError("Audiveris timed out after 300 seconds.") from exc
         except OSError as exc:
             raise OMRProcessingError(f"Could not run Audiveris: {exc}") from exc
 
@@ -53,6 +53,9 @@ class OMREngine:
             raise OMRProcessingError("Audiveris completed without producing a MusicXML file.")
 
         return output_musicxml
+
+    def process_image(self, image_path: str, output_dir: str) -> str:
+        return self.process_score(image_path, output_dir)
 
 def convert_musicxml_to_midi(musicxml_path: str, midi_output_path: str) -> str:
     try:
