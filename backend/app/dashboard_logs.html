@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Diagnostics détaillés · MelodiScan</title>
+    <title>Logs complets · MelodiScan</title>
     <style>
         :root {
             color-scheme: dark;
@@ -119,25 +119,25 @@
 <main>
     <header>
         <div>
-            <h1>Diagnostics détaillés</h1>
-            <div class="muted">Les erreurs complètes restent ici, séparées de l’historique principal.</div>
+            <h1>Logs complets</h1>
+            <div class="muted">Sortie complète d’Audiveris et étapes de chaque traitement, y compris en cours.</div>
         </div>
         <a href="/dashboard">Retour au dashboard</a>
     </header>
     <div class="layout">
         <section class="panel">
             <div class="toolbar">
-                <h2>Échecs récents</h2>
+                <h2>Traitements récents</h2>
                 <button class="refresh" id="refresh" type="button">Actualiser</button>
             </div>
             <div id="task-list" class="muted">Chargement des tâches…</div>
         </section>
         <section class="panel">
-            <h2 id="log-title">Sélectionnez un échec</h2>
+            <h2 id="log-title">Sélectionnez un traitement</h2>
             <div id="log-meta" class="muted" style="margin-top: 7px;"></div>
-            <div id="input-preview">
+            <div id="input-preview" hidden>
                 <h2>Fichier reçu par le serveur</h2>
-                <div id="input-preview-meta" class="muted">Sélectionnez un échec pour afficher son fichier.</div>
+                <div id="input-preview-meta" class="muted">Sélectionnez un traitement pour afficher son fichier.</div>
                 <div id="input-preview-content"></div>
             </div>
             <pre id="diagnostics" class="muted">Les diagnostics apparaîtront ici.</pre>
@@ -145,8 +145,9 @@
     </div>
 </main>
 <script>
-    let failedTasks = [];
+    let recentTasks = [];
     let selectedTaskId = '';
+    let detailsLoading = false;
 
     async function apiRequest(url) {
         const response = await fetch(url, { cache: 'no-store' });
@@ -167,30 +168,53 @@
         })[character]);
     }
 
+    function statusLabel(status) {
+        return ({
+            STATUS_QUEUED: 'En attente',
+            STATUS_PROCESSING_IMAGE: 'Validation',
+            STATUS_RUNNING_OMR: 'Audiveris',
+            STATUS_BUILDING_MUSICXML: 'MusicXML',
+            STATUS_EXPORTING_MIDI: 'Conversion MIDI',
+            STATUS_COMPLETED: 'Terminée',
+            STATUS_FAILED: 'Échec'
+        })[status] || status || 'Inconnue';
+    }
+
     async function showTask(taskId) {
+        if (detailsLoading) return;
+        const selectedTaskChanged = selectedTaskId !== taskId;
         selectedTaskId = taskId;
         document.querySelectorAll('.log-entry').forEach(button => {
             button.classList.toggle('selected', button.dataset.taskId === taskId);
         });
-        const task = failedTasks.find(item => item.task_id === taskId);
+        const task = recentTasks.find(item => item.task_id === taskId);
         if (!task) return;
         document.getElementById('log-title').textContent = task.title || 'Partition sans titre';
         document.getElementById('log-meta').textContent =
-            `ID ${task.task_id} · échec ${formatDate(task.failed_at || task.created_at)}`;
+            `ID ${task.task_id} · ${statusLabel(task.status)} · ${formatDate(task.failed_at || task.completed_at || task.created_at)}`;
         const output = document.getElementById('diagnostics');
-        output.classList.remove('error');
-        output.textContent = 'Chargement des diagnostics…';
         const previewMeta = document.getElementById('input-preview-meta');
         const previewContent = document.getElementById('input-preview-content');
-        previewMeta.textContent = 'Chargement du fichier reçu…';
-        previewContent.replaceChildren();
+        if (selectedTaskChanged) {
+            output.classList.remove('error');
+            output.textContent = 'Chargement des logs…';
+            previewMeta.textContent = 'Chargement du fichier reçu…';
+            previewContent.replaceChildren();
+        }
+        detailsLoading = true;
         try {
             const details = await apiRequest(`/api/v1/tasks/${encodeURIComponent(taskId)}/logs`);
+            document.getElementById('log-meta').textContent =
+                `ID ${taskId} · ${statusLabel(details.status)} · ${formatDate(details.failed_at || details.completed_at || details.created_at)}`;
+            const shouldScroll = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
             output.textContent = details.logs;
+            output.classList.remove('error');
+            if (shouldScroll) output.scrollTop = output.scrollHeight;
             const preview = details.input_preview;
-            if (!preview) {
+            document.getElementById('input-preview').hidden = !preview;
+            if (selectedTaskChanged && !preview) {
                 previewMeta.textContent = 'Le fichier reçu n’est plus disponible pour cette tâche.';
-            } else {
+            } else if (selectedTaskChanged && preview) {
                 previewMeta.textContent =
                     `${preview.filename} · ${Number(preview.size_bytes).toLocaleString('fr-FR')} octets`;
                 if (preview.media_type === 'application/pdf') {
@@ -217,47 +241,52 @@
             output.textContent = error.message;
             output.classList.add('error');
             previewMeta.textContent = 'Impossible de charger le fichier reçu.';
+        } finally {
+            detailsLoading = false;
         }
     }
 
-    async function loadFailures() {
+    async function loadTasks() {
         const list = document.getElementById('task-list');
         list.textContent = 'Chargement des tâches…';
         try {
             const data = await apiRequest('/api/v1/stats');
-            failedTasks = (data.recent_tasks || []).filter(task => task.status === 'STATUS_FAILED');
-            if (!failedTasks.length) {
-                list.textContent = 'Aucun échec dans les 50 traitements les plus récents.';
-                document.getElementById('log-title').textContent = 'Aucun échec récent';
+            recentTasks = data.recent_tasks || [];
+            if (!recentTasks.length) {
+                list.textContent = 'Aucun traitement récent.';
+                document.getElementById('log-title').textContent = 'Aucun traitement';
                 document.getElementById('log-meta').textContent = '';
-                document.getElementById('diagnostics').textContent = 'Aucun diagnostic à afficher.';
+                document.getElementById('diagnostics').textContent = 'Aucun log à afficher.';
                 selectedTaskId = '';
                 return;
             }
-            list.innerHTML = failedTasks.map(task => `
+            list.innerHTML = recentTasks.map(task => `
                 <button class="log-entry" type="button" data-task-id="${escapeHtml(task.task_id)}">
                     <span><strong>${escapeHtml(task.title || 'Partition sans titre')}</strong>
-                    <small>${escapeHtml(formatDate(task.failed_at || task.created_at))}</small></span>
-                    <small class="error">Échec</small>
+                    <small>${escapeHtml(formatDate(task.failed_at || task.completed_at || task.created_at))}</small></span>
+                    <small class="${task.status === 'STATUS_FAILED' ? 'error' : ''}">${escapeHtml(statusLabel(task.status))}</small>
                 </button>`).join('');
             list.querySelectorAll('.log-entry').forEach(button => {
                 button.addEventListener('click', () => showTask(button.dataset.taskId));
             });
             const requestedId = new URLSearchParams(location.search).get('task_id');
-            const nextTaskId = failedTasks.some(task => task.task_id === requestedId)
+            const nextTaskId = recentTasks.some(task => task.task_id === requestedId)
                 ? requestedId
-                : failedTasks.some(task => task.task_id === selectedTaskId)
+                : recentTasks.some(task => task.task_id === selectedTaskId)
                     ? selectedTaskId
-                    : failedTasks[0].task_id;
+                    : recentTasks[0].task_id;
             await showTask(nextTaskId);
         } catch (error) {
-            list.textContent = `Impossible de charger les échecs : ${error.message}`;
+            list.textContent = `Impossible de charger les traitements : ${error.message}`;
             list.classList.add('error');
         }
     }
 
-    document.getElementById('refresh').addEventListener('click', loadFailures);
-    loadFailures();
+    document.getElementById('refresh').addEventListener('click', loadTasks);
+    loadTasks();
+    setInterval(() => {
+        if (selectedTaskId) showTask(selectedTaskId);
+    }, 1500);
 </script>
 </body>
 </html>

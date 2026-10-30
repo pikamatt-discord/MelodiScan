@@ -285,13 +285,16 @@ async def get_task_logs(task_id: str):
     task = get_task_state(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-    if task.get("status") != "STATUS_FAILED":
-        raise HTTPException(status_code=409, detail="Detailed diagnostics are available only for failed tasks.")
 
     input_path = task.get("file_path")
     extension = os.path.splitext(input_path or "")[1].lower()
     input_preview = None
-    if extension in SCORE_MEDIA_TYPES and input_path and os.path.isfile(input_path):
+    if (
+        task.get("status") == "STATUS_FAILED"
+        and extension in SCORE_MEDIA_TYPES
+        and input_path
+        and os.path.isfile(input_path)
+    ):
         input_preview = {
             "url": f"/api/v1/tasks/{task_id}/input",
             "filename": os.path.basename(input_path),
@@ -299,14 +302,23 @@ async def get_task_logs(task_id: str):
             "size_bytes": os.path.getsize(input_path),
         }
 
+    logs_path = task.get("logs_path")
+    if logs_path and os.path.isfile(logs_path):
+        with open(logs_path, encoding="utf-8", errors="replace") as log_file:
+            logs = log_file.read()
+    else:
+        logs = task.get("error") or "Aucun log n’est disponible pour ce traitement."
+
     return {
         "task_id": task_id,
         "title": task.get("title") or "Partition sans titre",
         "status": task.get("status"),
         "created_at": task.get("created_at"),
         "failed_at": task.get("failed_at"),
-        "summary": task.get("error_summary") or TASK_FAILURE_SUMMARY,
-        "logs": task.get("error") or "Aucun diagnostic détaillé n’a été enregistré.",
+        "summary": task.get("error_summary") or (
+            TASK_FAILURE_SUMMARY if task.get("status") == "STATUS_FAILED" else None
+        ),
+        "logs": logs,
         "input_preview": input_preview,
     }
 
@@ -574,7 +586,7 @@ async def dashboard():
                     <div style="color: var(--text-muted); font-size: 14px;">Tableau de Bord & Statistiques OMR Temps Réel</div>
                 </div>
             </div>
-            <a class="btn-secondary" href="/dashboard/logs">Diagnostics détaillés</a>
+            <a class="btn-secondary" href="/dashboard/logs">Logs complets</a>
             <span class="badge" id="server-badge">Vérification des services…</span>
         </div>
 
@@ -747,14 +759,13 @@ async def dashboard():
                 const result = completed
                     ? `<a href="/api/v1/result/${encodeURIComponent(task.task_id)}">Télécharger MIDI</a>`
                     : '—';
-                const errorLink = failed
-                    ? `<a class="task-error" href="/dashboard/logs?task_id=${encodeURIComponent(task.task_id)}">Voir les diagnostics</a>`
-                    : '';
+                const logsLink =
+                    `<a class="task-error" href="/dashboard/logs?task_id=${encodeURIComponent(task.task_id)}">Voir les logs</a>`;
                 return `<tr>
                     <td><code>${escapeHtml((task.task_id || '').slice(0, 12))}</code></td>
                     <td><strong>${escapeHtml(task.title || 'Partition sans titre')}</strong></td>
                     <td><span class="status-pill ${className}">${escapeHtml(statusLabel)}</span>
-                        ${errorLink}</td>
+                        ${logsLink}</td>
                     <td>${escapeHtml(formatDate(task.created_at))}</td>
                     <td>${result}</td>
                 </tr>`;
@@ -910,9 +921,12 @@ async def scan_score(
     task_id = str(uuid.uuid4())
     os.makedirs("data/temp", exist_ok=True)
     temp_file_path = os.path.join("data/temp", f"{task_id}{extension}")
+    log_path = os.path.join("data/temp", f"{task_id}.log")
 
     with open(temp_file_path, "wb") as f:
         f.write(content)
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        log_file.write(f"Fichier reçu : {file.filename} ({len(content)} octets)\n")
 
     now = datetime.now(timezone.utc).isoformat()
     task_info = {
@@ -921,6 +935,7 @@ async def scan_score(
         "status": "STATUS_QUEUED",
         "created_at": now,
         "file_path": temp_file_path,
+        "logs_path": log_path,
         "midi_path": None
     }
     set_task_state(task_id, task_info)
@@ -936,6 +951,8 @@ async def scan_score(
             "error_summary": TASK_FAILURE_SUMMARY,
             "failed_at": datetime.now(timezone.utc).isoformat(),
         })
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(f"\nÉchec de mise en file : {exc}\n")
         set_task_state(task_id, task_info)
         try:
             os.remove(temp_file_path)
