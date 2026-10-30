@@ -26,7 +26,7 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         }
         main { max-width: 1200px; margin: 0 auto; }
-        header, .toolbar, .log-entry {
+        header, .toolbar, .log-entry, .log-toolbar {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -36,7 +36,7 @@
         h1 { margin: 0; font-size: 25px; }
         h2 { margin: 0; font-size: 18px; }
         a, button { font: inherit; }
-        a, .refresh {
+        a, .refresh, .copy-logs {
             color: var(--accent);
             border: 1px solid var(--border);
             border-radius: 9px;
@@ -45,6 +45,7 @@
             text-decoration: none;
             cursor: pointer;
         }
+        .copy-logs:disabled { opacity: 0.5; cursor: not-allowed; }
         .layout {
             display: grid;
             grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
@@ -133,8 +134,12 @@
             <div id="task-list" class="muted">Chargement des tâches…</div>
         </section>
         <section class="panel">
-            <h2 id="log-title">Sélectionnez un traitement</h2>
+            <div class="log-toolbar">
+                <h2 id="log-title">Sélectionnez un traitement</h2>
+                <button class="copy-logs" id="copy-logs" type="button" disabled>Copier les logs</button>
+            </div>
             <div id="log-meta" class="muted" style="margin-top: 7px;"></div>
+            <div id="copy-status" class="muted" role="status" aria-live="polite"></div>
             <div id="input-preview" hidden>
                 <h2>Fichier reçu par le serveur</h2>
                 <div id="input-preview-meta" class="muted">Sélectionnez un traitement pour afficher son fichier.</div>
@@ -196,6 +201,8 @@
         const previewMeta = document.getElementById('input-preview-meta');
         const previewContent = document.getElementById('input-preview-content');
         if (selectedTaskChanged) {
+            document.getElementById('copy-logs').disabled = true;
+            document.getElementById('copy-status').textContent = '';
             output.classList.remove('error');
             output.textContent = 'Chargement des logs…';
             previewMeta.textContent = 'Chargement du fichier reçu…';
@@ -208,6 +215,7 @@
                 `ID ${taskId} · ${statusLabel(details.status)} · ${formatDate(details.failed_at || details.completed_at || details.created_at)}`;
             const shouldScroll = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
             output.textContent = details.logs;
+            document.getElementById('copy-logs').disabled = !details.logs;
             output.classList.remove('error');
             if (shouldScroll) output.scrollTop = output.scrollHeight;
             const preview = details.input_preview;
@@ -238,11 +246,29 @@
                 }
             }
         } catch (error) {
+            document.getElementById('copy-logs').disabled = true;
             output.textContent = error.message;
             output.classList.add('error');
             previewMeta.textContent = 'Impossible de charger le fichier reçu.';
         } finally {
             detailsLoading = false;
+        }
+    }
+
+    async function copyLogs() {
+        const logs = document.getElementById('diagnostics').textContent;
+        const status = document.getElementById('copy-status');
+        if (!logs) return;
+        try {
+            if (!navigator.clipboard?.writeText) {
+                throw new Error('La copie n’est pas disponible dans ce navigateur.');
+            }
+            await navigator.clipboard.writeText(logs);
+            status.textContent = 'Logs copiés.';
+            status.classList.remove('error');
+        } catch (error) {
+            status.textContent = `Impossible de copier les logs : ${error.message}`;
+            status.classList.add('error');
         }
     }
 
@@ -283,6 +309,7 @@
     }
 
     document.getElementById('refresh').addEventListener('click', loadTasks);
+    document.getElementById('copy-logs').addEventListener('click', copyLogs);
     loadTasks();
     setInterval(() => {
         if (selectedTaskId) showTask(selectedTaskId);
