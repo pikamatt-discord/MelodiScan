@@ -116,6 +116,7 @@ set_env MELODISCAN_HOST "$LAN_IP"
 printf 'Démarrage des services MelodiScan sur https://%s ...\n' "$LAN_IP"
 compose up -d --build
 
+printf 'Attente du certificat HTTPS local de Caddy...\n'
 ca_ready=false
 for attempt in $(seq 1 30); do
   if "${DOCKER[@]}" cp melodiscan_https:/data/caddy/pki/authorities/local/root.crt \
@@ -123,13 +124,25 @@ for attempt in $(seq 1 30); do
     ca_ready=true
     break
   fi
+  if (( attempt % 10 == 0 )); then
+    printf 'Caddy initialise encore son certificat (%s/30 s)...\n' "$attempt"
+  fi
   sleep 1
 done
-[[ "$ca_ready" == true ]] || fail "Le certificat racine Caddy n'a pas été généré après 30 secondes."
+if [[ "$ca_ready" != true ]]; then
+  printf 'État des conteneurs :\n' >&2
+  compose ps >&2 || true
+  printf 'Derniers logs Caddy :\n' >&2
+  compose logs --tail=40 melodiscan-https >&2 || true
+  fail "Le certificat racine Caddy n'a pas été généré après 30 secondes."
+fi
+printf 'Certificat HTTPS récupéré. Vérification des services...\n'
 
 BASE_URL="https://${LAN_IP}"
 HEALTH_URL="${BASE_URL}/health"
 ready=false
+health_status="aucune réponse"
+health_body=""
 for attempt in $(seq 1 60); do
   health_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
     --connect-timeout 2 --write-out $'\n%{http_code}' "$HEALTH_URL" 2>/dev/null || true)"
@@ -146,10 +159,36 @@ sys.exit(0 if data.get("status") == "ok" and all(data.get("dependencies",{}).get
     ready=true
     break
   fi
+  if (( attempt % 5 == 0 )); then
+    health_summary="$(printf '%s' "$health_body" | python3 -c '
+import json,sys
+try:
+ data=json.load(sys.stdin)
+ print(", ".join(f"{name}={state}" for name,state in data.get("dependencies",{}).items()) or "état des dépendances indisponible")
+except (json.JSONDecodeError, AttributeError):
+ print("réponse HTTPS ou JSON indisponible")
+' 2>/dev/null || printf 'réponse HTTPS ou JSON indisponible')"
+    printf 'En attente de /health (%s/120 s) : HTTP %s; %s\n' \
+      "$((attempt * 2))" "$health_status" "$health_summary"
+  fi
   sleep 2
 done
-[[ "$ready" == true ]] ||
-  fail "Le contrôle réel de ${HEALTH_URL} (HTTPS avec la CA Caddy, HTTP 200 et tous les services) a échoué. Consultez : docker compose logs"
+if [[ "$ready" != true ]]; then
+  health_summary="$(printf '%s' "$health_body" | python3 -c '
+import json,sys
+try:
+ data=json.load(sys.stdin)
+ print(", ".join(f"{name}={state}" for name,state in data.get("dependencies",{}).items()) or "état des dépendances indisponible")
+except (json.JSONDecodeError, AttributeError):
+ print("réponse HTTPS ou JSON indisponible")
+' 2>/dev/null || printf 'réponse HTTPS ou JSON indisponible')"
+  printf 'Dernier contrôle : HTTP %s; %s\n' "$health_status" "$health_summary" >&2
+  printf 'État des conteneurs :\n' >&2
+  compose ps >&2 || true
+  printf 'Derniers logs des services concernés :\n' >&2
+  compose logs --tail=40 melodiscan-https melodiscan-api melodiscan-worker melodiscan-apk-builder >&2 || true
+  fail "Le contrôle réel de ${HEALTH_URL} (HTTPS avec la CA Caddy, HTTP 200 et tous les services) a échoué."
+fi
 
 if command -v update-ca-certificates >/dev/null 2>&1; then
   "${SUDO[@]}" install -m 0644 data/caddy-root.crt /usr/local/share/ca-certificates/melodiscan-caddy.crt
@@ -157,7 +196,7 @@ if command -v update-ca-certificates >/dev/null 2>&1; then
 fi
 
 printf 'URL HTTPS vérifiée : %s (GET /health : HTTP 200, Redis/worker/Audiveris/générateur APK opérationnels)\n' "$BASE_URL"
-printf 'Génération de l’APK Android Release dans le conteneur Flutter...\n'
+printf 'Génération de l’APK Android Release dans le conteneur Flutter (le premier build peut prendre plusieurs minutes)...\n'
 build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
   --connect-timeout 5 --write-out $'\n%{http_code}' \
   -X POST -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build")" ||
@@ -190,7 +229,10 @@ for attempt in $(seq 1 1800); do
     fail "La génération de l’APK a échoué : ${build_error}"
   fi
   if (( attempt % 15 == 0 )); then
-    printf 'Compilation toujours en cours (%.0f s)...\n' "$((attempt * 2))"
+    build_progress="$(printf '%s' "$build_body" | python3 -c \
+      'import json,sys; print(json.load(sys.stdin).get("progress","Compilation toujours en cours"))' \
+      2>/dev/null || printf 'Compilation toujours en cours')"
+    printf '%s (%.0f s)...\n' "$build_progress" "$((attempt * 2))"
   fi
   sleep 2
 done
