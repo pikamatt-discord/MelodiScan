@@ -60,6 +60,13 @@ if ! docker compose version >/dev/null 2>&1; then
     fail "Docker Compose v2 est introuvable. Installez le plugin Docker Compose puis relancez."
 fi
 
+if command -v systemctl >/dev/null 2>&1; then
+  "${SUDO[@]}" systemctl enable --now docker ||
+    fail "Impossible d'activer et démarrer Docker avec systemd."
+else
+  fail "systemctl est requis pour activer le démarrage automatique de Docker sur Ubuntu."
+fi
+
 if docker info >/dev/null 2>&1; then
   DOCKER=(docker)
 elif "${SUDO[@]}" docker info >/dev/null 2>&1; then
