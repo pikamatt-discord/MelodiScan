@@ -149,6 +149,7 @@ def test_apk_generation(headers: dict[str, str]) -> bool:
                     apk.get("available") is True
                     and apk.get("size_bytes", 0) > 0
                     and bool(apk.get("sha256"))
+                    and bool(apk.get("input_fingerprint"))
                     and apk.get("signature_verified") is True,
                     f"{apk.get('size_bytes', 0)} bytes, SHA-256 and Android signature verified",
                 )
@@ -226,8 +227,22 @@ def main() -> int:
             and artifact.get("available") is True
             and artifact.get("size_bytes", 0) > 0
             and bool(artifact.get("sha256"))
+            and bool(artifact.get("input_fingerprint"))
             and artifact.get("signature_verified") is True,
             f"HTTP {status}; build status: {apk_status.get('status')}",
+        ))
+        fingerprint_status, fingerprint_body, _ = request(
+            f"{API_URL}/api/v1/apk/fingerprint",
+            headers=headers,
+        )
+        fingerprint_data = json.loads(fingerprint_body) if fingerprint_status == 200 else {}
+        checks.append(report(
+            "APK fingerprint matches the current mobile and deployment inputs",
+            fingerprint_status == 200
+            and bool(fingerprint_data.get("input_fingerprint"))
+            and fingerprint_data.get("input_fingerprint")
+            == fingerprint_data.get("apk", {}).get("input_fingerprint"),
+            f"HTTP {fingerprint_status}",
         ))
 
         status, _, _ = request(f"{API_URL}/dashboard")

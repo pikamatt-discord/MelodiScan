@@ -217,49 +217,71 @@ if command -v update-ca-certificates >/dev/null 2>&1; then
 fi
 
 printf 'URL HTTPS vérifiée : %s (GET /health : HTTP 200, Redis/worker/Audiveris/générateur APK opérationnels)\n' "$BASE_URL"
-printf 'Génération de l’APK Android Release dans le conteneur Flutter (le premier build peut prendre plusieurs minutes)...\n'
-build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
+fingerprint_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
   --connect-timeout 5 --write-out $'\n%{http_code}' \
-  -X POST -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build")" ||
-  fail "Impossible de démarrer la génération de l’APK via ${BASE_URL}."
-build_http_status="${build_response##*$'\n'}"
-build_body="${build_response%$'\n'*}"
-if [[ "$build_http_status" != 202 && "$build_http_status" != 409 ]]; then
-  fail "Le générateur d’APK a refusé la demande (HTTP ${build_http_status})."
-fi
-BUILD_ID="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build_id",""))')"
-[[ "$BUILD_ID" =~ ^[0-9a-fA-F-]{36}$ ]] ||
-  fail "Le générateur n’a pas retourné un identifiant de build valide."
+  -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/fingerprint")" ||
+  fail "Impossible de vérifier si l’APK existant correspond à cette version de l’application."
+fingerprint_http_status="${fingerprint_response##*$'\n'}"
+fingerprint_body="${fingerprint_response%$'\n'*}"
+[[ "$fingerprint_http_status" == 200 ]] ||
+  fail "Impossible de calculer l’empreinte de l’APK (HTTP ${fingerprint_http_status})."
 
-apk_ready=false
-for attempt in $(seq 1 1800); do
+if printf '%s' "$fingerprint_body" | python3 -c '
+import json,sys
+data=json.load(sys.stdin)
+apk=data.get("apk", {})
+fingerprint=data.get("input_fingerprint")
+sys.exit(0 if fingerprint and apk.get("available") is True
+         and apk.get("signature_verified") is True
+         and apk.get("input_fingerprint") == fingerprint else 1)
+'; then
+  printf 'APK déjà à jour : sources mobiles et configuration inchangées; compilation ignorée.\n'
+else
+  printf 'APK absent ou sources/configuration modifiées; génération de l’APK Android Release...\n'
+  printf 'Le premier build après une modification peut prendre plusieurs minutes.\n'
   build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
     --connect-timeout 5 --write-out $'\n%{http_code}' \
-    -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build/${BUILD_ID}" 2>/dev/null || true)"
+    -X POST -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build")" ||
+    fail "Impossible de démarrer la génération de l’APK via ${BASE_URL}."
   build_http_status="${build_response##*$'\n'}"
   build_body="${build_response%$'\n'*}"
-  build_status="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-  if [[ "$build_http_status" != 200 ]]; then
-    fail "Impossible de vérifier le build APK via ${BASE_URL} (HTTP ${build_http_status})."
+  if [[ "$build_http_status" != 202 && "$build_http_status" != 409 ]]; then
+    fail "Le générateur d’APK a refusé la demande (HTTP ${build_http_status})."
   fi
-  if [[ "$build_status" == completed ]]; then
-    apk_ready=true
-    break
-  elif [[ "$build_status" == failed ]]; then
-    build_error="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error","erreur inconnue"))' 2>/dev/null || true)"
-    fail "La génération de l’APK a échoué : ${build_error}"
-  fi
-  if (( attempt % 15 == 0 )); then
-    build_progress="$(printf '%s' "$build_body" | python3 -c \
-      'import json,sys; print(json.load(sys.stdin).get("progress","Compilation toujours en cours"))' \
-      2>/dev/null || printf 'Compilation toujours en cours')"
-    printf '%s (%.0f s)...\n' "$build_progress" "$((attempt * 2))"
-  fi
-  sleep 2
-done
-[[ "$apk_ready" == true ]] || fail "La génération de l’APK n’a pas abouti en 60 minutes."
+  BUILD_ID="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build_id",""))')"
+  [[ "$BUILD_ID" =~ ^[0-9a-fA-F-]{36}$ ]] ||
+    fail "Le générateur n’a pas retourné un identifiant de build valide."
+
+  apk_ready=false
+  for attempt in $(seq 1 1800); do
+    build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
+      --connect-timeout 5 --write-out $'\n%{http_code}' \
+      -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build/${BUILD_ID}" 2>/dev/null || true)"
+    build_http_status="${build_response##*$'\n'}"
+    build_body="${build_response%$'\n'*}"
+    build_status="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+    if [[ "$build_http_status" != 200 ]]; then
+      fail "Impossible de vérifier le build APK via ${BASE_URL} (HTTP ${build_http_status})."
+    fi
+    if [[ "$build_status" == completed ]]; then
+      apk_ready=true
+      break
+    elif [[ "$build_status" == failed ]]; then
+      build_error="$(printf '%s' "$build_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error","erreur inconnue"))' 2>/dev/null || true)"
+      fail "La génération de l’APK a échoué : ${build_error}"
+    fi
+    if (( attempt % 15 == 0 )); then
+      build_progress="$(printf '%s' "$build_body" | python3 -c \
+        'import json,sys; print(json.load(sys.stdin).get("progress","Compilation toujours en cours"))' \
+        2>/dev/null || printf 'Compilation toujours en cours')"
+      printf '%s (%.0f s)...\n' "$build_progress" "$((attempt * 2))"
+    fi
+    sleep 2
+  done
+  [[ "$apk_ready" == true ]] || fail "La génération de l’APK n’a pas abouti en 60 minutes."
+fi
 [[ -s data/apk/app-release.apk ]] ||
-  fail "Le build est déclaré terminé, mais data/apk/app-release.apk est absent."
+  fail "L’APK est déclaré disponible, mais data/apk/app-release.apk est absent."
 
 printf '\nInstallation terminée.\n'
 printf 'Dashboard : %s/dashboard\n' "$BASE_URL"

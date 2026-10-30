@@ -274,6 +274,12 @@ async def get_apk_status():
     return JSONResponse(status_code=status, content=payload)
 
 
+@app.get("/api/v1/apk/fingerprint")
+async def get_apk_fingerprint():
+    status, payload = await request_apk_builder("GET", "/fingerprint")
+    return JSONResponse(status_code=status, content=payload)
+
+
 @app.post("/api/v1/apk/build")
 async def start_apk_build():
     if not API_KEY or not MELODISCAN_HOST:

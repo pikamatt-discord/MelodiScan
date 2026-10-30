@@ -23,6 +23,8 @@ def prepare_builder(tmp_path, monkeypatch):
     built_apk = workspace / "build/app/outputs/flutter-apk/app-release.apk"
     built_apk.parent.mkdir(parents=True)
     (workspace / "pubspec.yaml").write_text("name: test", encoding="utf-8")
+    (workspace / "lib").mkdir()
+    (workspace / "lib" / "main.dart").write_text("void main() {}", encoding="utf-8")
     output = tmp_path / "output"
     output.mkdir()
     ca_file = tmp_path / "root.crt"
@@ -69,6 +71,7 @@ def test_build_creates_signed_release_artifact_with_deployment_defines(tmp_path,
     assert state["signature_verified"] is True
     assert state["apk"]["available"] is True
     assert state["apk"]["signature_verified"] is True
+    assert state["apk"]["input_fingerprint"]
     assert state["apk"]["sha256"] == hashlib.sha256((output / "app-release.apk").read_bytes()).hexdigest()
     assert zipfile.is_zipfile(output / "app-release.apk")
 
@@ -83,6 +86,38 @@ def test_build_creates_signed_release_artifact_with_deployment_defines(tmp_path,
         "MELODISCAN_API_KEY": "test-api-key",
         "MELODISCAN_ROOT_CA_BASE64": base64.b64encode(b"test-root-certificate").decode("ascii"),
     }
+
+
+def test_build_input_fingerprint_tracks_mobile_and_deployment_inputs(tmp_path, monkeypatch):
+    workspace, _built_apk, _output = prepare_builder(tmp_path, monkeypatch)
+
+    initial = apk_builder.build_input_fingerprint()
+    assert apk_builder.build_input_fingerprint() == initial
+
+    (workspace / "build").mkdir(exist_ok=True)
+    (workspace / "build" / "generated.dart").write_text("generated", encoding="utf-8")
+    assert apk_builder.build_input_fingerprint() == initial
+
+    assets = workspace / "assets" / "build"
+    assets.mkdir(parents=True)
+    (assets / "input.txt").write_text("asset", encoding="utf-8")
+    assets_fingerprint = apk_builder.build_input_fingerprint()
+    assert assets_fingerprint != initial
+
+    (workspace / "lib" / "main.dart").write_text("void main() { print('updated'); }", encoding="utf-8")
+    source_changed = apk_builder.build_input_fingerprint()
+    assert source_changed != assets_fingerprint
+
+    monkeypatch.setattr(apk_builder, "HOST", "192.168.1.26")
+    host_changed = apk_builder.build_input_fingerprint()
+    assert host_changed != source_changed
+
+    monkeypatch.setattr(apk_builder, "API_KEY", "updated-api-key")
+    key_changed = apk_builder.build_input_fingerprint()
+    assert key_changed != host_changed
+
+    apk_builder.CA_PATH.write_bytes(b"updated-root-certificate")
+    assert apk_builder.build_input_fingerprint() != key_changed
 
 
 def test_failed_flutter_build_reports_error_and_preserves_no_success_state(tmp_path, monkeypatch):

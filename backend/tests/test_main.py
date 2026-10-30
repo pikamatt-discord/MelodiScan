@@ -360,6 +360,7 @@ def test_apk_build_routes_proxy_to_builder(monkeypatch):
 
     started = client.post("/api/v1/apk/build", headers={"X-API-Key": "configured-test-key"})
     status = client.get("/api/v1/apk/status", headers={"X-API-Key": "configured-test-key"})
+    fingerprint = client.get("/api/v1/apk/fingerprint", headers={"X-API-Key": "configured-test-key"})
     progress = client.get(
         "/api/v1/apk/build/a9bcedd0-cb64-4c62-9b2d-5d06c0e7f32a",
         headers={"X-API-Key": "configured-test-key"},
@@ -367,10 +368,12 @@ def test_apk_build_routes_proxy_to_builder(monkeypatch):
 
     assert started.status_code == 202
     assert status.status_code == 200
+    assert fingerprint.status_code == 200
     assert progress.status_code == 200
     assert calls == [
         ("POST", "/build"),
         ("GET", "/status"),
+        ("GET", "/fingerprint"),
         ("GET", "/build/a9bcedd0-cb64-4c62-9b2d-5d06c0e7f32a"),
     ]
 

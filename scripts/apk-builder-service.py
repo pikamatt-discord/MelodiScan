@@ -26,10 +26,46 @@ HOST = os.environ.get("MELODISCAN_HOST", "")
 STATE_LOCK = threading.Lock()
 BUILD_STATE = {"status": "idle"}
 MAX_LOG_LENGTH = 6000
+BUILD_ENVIRONMENT = "ghcr.io/cirruslabs/flutter:3.44.0"
+GENERATED_DIRECTORIES = {".dart_tool", ".gradle", ".idea", ".git"}
+GENERATED_BUILD_DIRECTORIES = {"build", "android/build", "android/app/build"}
+GENERATED_FILES = {".flutter-plugins", ".flutter-plugins-dependencies", "local.properties"}
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def build_input_fingerprint() -> str:
+    digest = hashlib.sha256()
+    ca_bytes = CA_PATH.read_bytes()
+    config = {
+        "api_url": f"https://{HOST}",
+        "api_key": API_KEY,
+        "ca_sha256": hashlib.sha256(ca_bytes).hexdigest(),
+        "build_environment": BUILD_ENVIRONMENT,
+    }
+    digest.update(json.dumps(config, sort_keys=True).encode("utf-8"))
+    digest.update(Path(__file__).read_bytes())
+
+    for root, directories, filenames in os.walk(WORKSPACE):
+        kept_directories = []
+        for name in directories:
+            relative_directory = (Path(root) / name).relative_to(WORKSPACE).as_posix()
+            if name in GENERATED_DIRECTORIES or relative_directory in GENERATED_BUILD_DIRECTORIES:
+                continue
+            kept_directories.append(name)
+        directories[:] = sorted(kept_directories)
+        for filename in sorted(filenames):
+            if filename in GENERATED_FILES:
+                continue
+            path = Path(root) / filename
+            relative_path = path.relative_to(WORKSPACE).as_posix()
+            digest.update(relative_path.encode("utf-8"))
+            with path.open("rb") as source_file:
+                for block in iter(lambda: source_file.read(1024 * 1024), b""):
+                    digest.update(block)
+    return digest.hexdigest()
 
 
 def artifact_info() -> dict:
@@ -52,6 +88,7 @@ def artifact_info() -> dict:
         "size_bytes": details.st_size,
         "sha256": metadata.get("sha256"),
         "signature_verified": metadata.get("signature_verified", False),
+        "input_fingerprint": metadata.get("input_fingerprint"),
         "generated_at": metadata.get(
             "generated_at",
             datetime.fromtimestamp(details.st_mtime, timezone.utc).isoformat(),
@@ -77,6 +114,7 @@ def build_apk(build_id: str) -> None:
     staged_apk = None
     staged_metadata = None
     try:
+        input_fingerprint = build_input_fingerprint()
         ca_base64 = base64.b64encode(CA_PATH.read_bytes()).decode("ascii")
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix="melodiscan-dart-defines-", suffix=".json", delete=False
@@ -162,6 +200,7 @@ def build_apk(build_id: str) -> None:
         metadata = {
             "sha256": digest.hexdigest(),
             "signature_verified": True,
+            "input_fingerprint": input_fingerprint,
             "generated_at": now(),
         }
         with tempfile.NamedTemporaryFile(
@@ -234,6 +273,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/status":
             self.send_json(200, current_status())
+            return
+        if self.path == "/fingerprint":
+            self.send_json(200, {
+                "input_fingerprint": build_input_fingerprint(),
+                "apk": artifact_info(),
+            })
             return
         if self.path.startswith("/build/"):
             build_id = self.path.removeprefix("/build/")
