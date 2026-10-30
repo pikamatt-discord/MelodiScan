@@ -161,6 +161,8 @@ class _ScanScreenState extends State<ScanScreen> {
             taskId: body['task_id'] as String,
             title: title.isEmpty ? 'Untitled Score' : title,
             serverUrl: serverUrl,
+            sourceFilePath: file.path,
+            sourceFileIsPdf: _selectedFileIsPdf,
             apiKey: apiKey,
             httpClient: client,
           ),

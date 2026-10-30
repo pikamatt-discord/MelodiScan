@@ -1,24 +1,36 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:pdfx/pdfx.dart';
 
+import '../models/midi_visualization.dart';
 import '../network/api_client.dart';
+import '../services/midi_playback.dart';
 
 class PlayerScreen extends StatefulWidget {
   final String taskId;
   final String title;
   final String serverUrl;
+  final String? sourceFilePath;
+  final bool sourceFileIsPdf;
   final String apiKey;
   final http.Client? httpClient;
+  final MidiPlayback? midiPlayback;
 
   const PlayerScreen({
     super.key,
     required this.taskId,
     required this.title,
     required this.serverUrl,
+    this.sourceFilePath,
+    this.sourceFileIsPdf = false,
     this.apiKey = '',
     this.httpClient,
+    this.midiPlayback,
   });
 
   @override
@@ -27,8 +39,20 @@ class PlayerScreen extends StatefulWidget {
 
 class _PlayerScreenState extends State<PlayerScreen> {
   bool _isLoading = true;
-  int? _midiBytesLength;
+  Uint8List? _midiBytes;
+  MidiVisualization? _visualization;
   String? _errorMessage;
+  String? _playbackError;
+  bool _isPreparingPlayback = false;
+  bool _isPlaying = false;
+  bool _playbackComplete = false;
+  bool _hasPreparedPlayback = false;
+  int _currentTick = 0;
+  bool _isReadingPosition = false;
+  Timer? _positionTimer;
+  Future<void>? _playbackOperation;
+  late final MidiPlayback _playback =
+      widget.midiPlayback ?? FlutterMidiPlayback();
 
   @override
   void initState() {
@@ -40,7 +64,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
-      _midiBytesLength = null;
+      _midiBytes = null;
+      _visualization = null;
     });
 
     try {
@@ -63,10 +88,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         throw const FormatException(
             'Le serveur n’a pas renvoyé un fichier MIDI valide.');
       }
+      final visualization = MidiVisualization.parse(bytes);
 
       if (mounted) {
         setState(() {
-          _midiBytesLength = bytes.length;
+          _midiBytes = bytes;
+          _visualization = visualization;
           _isLoading = false;
         });
       }
@@ -104,21 +131,173 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return 'Le serveur a refusé le résultat (${response.statusCode}).';
   }
 
+  Future<void> _togglePlayback() async {
+    if (_isPreparingPlayback || _midiBytes == null || !_playback.isSupported) {
+      return;
+    }
+
+    final operation = _runPlaybackAction();
+    _playbackOperation = operation;
+    await operation;
+  }
+
+  Future<void> _runPlaybackAction() async {
+    final wasPlaying = _isPlaying;
+    setState(() {
+      _isPreparingPlayback = true;
+      _playbackError = null;
+    });
+
+    try {
+      if (!_hasPreparedPlayback) {
+        await _playback.prepare(_midiBytes!);
+        _hasPreparedPlayback = true;
+      }
+
+      if (wasPlaying) {
+        await _playback.pause();
+        _positionTimer?.cancel();
+        final position = await _playback.getPosition();
+        if (mounted) {
+          setState(() => _currentTick = position.currentTick);
+        }
+      } else {
+        if (_playbackComplete) {
+          await _playback.stop();
+        }
+        await _playback.play();
+      }
+      if (mounted) {
+        setState(() {
+          _isPlaying = !wasPlaying;
+          _playbackComplete = false;
+        });
+        if (!wasPlaying) _startPositionPolling();
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _playbackError =
+              'Impossible de lire ce fichier MIDI : ${error.toString().replaceFirst('Bad state: ', '')}';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isPreparingPlayback = false);
+      }
+    }
+  }
+
+  Future<void> _stopPlayback() async {
+    if (_isPreparingPlayback || !_hasPreparedPlayback) return;
+    setState(() {
+      _isPreparingPlayback = true;
+      _playbackError = null;
+    });
+    final operation = _stopPlaybackAction();
+    _playbackOperation = operation;
+    await operation;
+  }
+
+  Future<void> _stopPlaybackAction() async {
+    try {
+      await _playback.stop();
+      _positionTimer?.cancel();
+      if (mounted) {
+        setState(() {
+          _isPlaying = false;
+          _playbackComplete = false;
+          _currentTick = 0;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _playbackError =
+            'Impossible d’arrêter la lecture : ${error.toString()}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isPreparingPlayback = false);
+      }
+    }
+  }
+
+  void _startPositionPolling() {
+    _positionTimer?.cancel();
+    _positionTimer = Timer.periodic(
+      const Duration(milliseconds: 150),
+      (_) => _refreshPlaybackPosition(),
+    );
+    unawaited(_refreshPlaybackPosition());
+  }
+
+  Future<void> _refreshPlaybackPosition() async {
+    if (_isReadingPosition || !mounted) return;
+    _isReadingPosition = true;
+    try {
+      final position = await _playback.getPosition();
+      if (!mounted) return;
+      setState(() {
+        _currentTick = position.currentTick;
+        _isPlaying = position.isPlaying;
+        _playbackComplete = position.isComplete;
+      });
+      if (!position.isPlaying) {
+        _positionTimer?.cancel();
+      }
+    } catch (error) {
+      _positionTimer?.cancel();
+      if (mounted) {
+        setState(() => _playbackError =
+            'Impossible de suivre la lecture MIDI : ${error.toString()}');
+      }
+    } finally {
+      _isReadingPosition = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _positionTimer?.cancel();
+    final pendingOperation = _playbackOperation;
+    if (pendingOperation == null) {
+      unawaited(_disposePlayback());
+    } else {
+      unawaited(pendingOperation.whenComplete(_disposePlayback));
+    }
+    super.dispose();
+  }
+
+  Future<void> _disposePlayback() async {
+    try {
+      await _playback.dispose();
+    } catch (error, stackTrace) {
+      FlutterError.reportError(FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'MelodiScan MIDI player',
+        context: ErrorDescription('while releasing MIDI playback resources'),
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: _isLoading
-              ? const CircularProgressIndicator()
-              : _errorMessage != null
-                  ? _buildError(theme)
-                  : _buildMidiResult(theme),
-        ),
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _errorMessage != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: _buildError(theme),
+                    ),
+                  )
+                : _buildMidiResult(theme),
       ),
     );
   }
@@ -147,28 +326,496 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Widget _buildMidiResult(ThemeData theme) {
     final resultUrl = '${widget.serverUrl}/api/v1/result/${widget.taskId}';
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.music_note_rounded,
-            color: theme.colorScheme.secondary, size: 64),
-        const SizedBox(height: 16),
-        const Text(
-          'Fichier MIDI reçu et vérifié',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        Text('Taille : $_midiBytesLength octets'),
-        const SizedBox(height: 20),
-        const Text(
-          'La lecture audio intégrée n’est pas disponible dans cette version.',
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 12),
-        const Text('URL du fichier MIDI :'),
-        const SizedBox(height: 4),
-        SelectableText(resultUrl, textAlign: TextAlign.center),
-      ],
+    final playbackSupported = _playback.isSupported;
+    final visualization = _visualization!;
+    final pitchRange = _pitchRange(visualization.notes);
+    final activePitches = {
+      for (final note in visualization.notes)
+        if (_currentTick >= note.startTick && _currentTick < note.endTick)
+          note.pitch,
+    };
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        return Column(
+          children: [
+            Expanded(
+              flex: isLandscape ? 2 : 3,
+              child: _ScorePreview(
+                filePath: widget.sourceFilePath,
+                isPdf: widget.sourceFileIsPdf,
+              ),
+            ),
+            Expanded(
+              flex: isLandscape ? 5 : 5,
+              child: _PianoRoll(
+                notes: visualization.notes,
+                ticksPerBeat: visualization.ticksPerBeat,
+                currentTick: _currentTick,
+                lowPitch: pitchRange.$1,
+                highPitch: pitchRange.$2,
+              ),
+            ),
+            SizedBox(
+              height: isLandscape ? 72 : 104,
+              child: _PianoKeyboard(
+                lowPitch: pitchRange.$1,
+                highPitch: pitchRange.$2,
+                activePitches: activePitches,
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: isLandscape ? 2 : 8,
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '${_midiBytes!.length} octets',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const Spacer(),
+                  if (playbackSupported) ...[
+                    FilledButton.icon(
+                      key: const Key('play_pause_fab'),
+                      onPressed: _isPreparingPlayback ? null : _togglePlayback,
+                      icon: _isPreparingPlayback
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : Icon(
+                              _isPlaying ? Icons.pause : Icons.play_arrow,
+                            ),
+                      label: Text(
+                        _isPlaying
+                            ? 'Pause'
+                            : _playbackComplete
+                                ? 'Rejouer'
+                                : 'Lire',
+                      ),
+                    ),
+                    IconButton(
+                      key: const Key('stop_playback'),
+                      onPressed: _isPreparingPlayback || !_hasPreparedPlayback
+                          ? null
+                          : _stopPlayback,
+                      tooltip: 'Arrêter',
+                      icon: const Icon(Icons.stop),
+                    ),
+                  ] else
+                    const Text('Lecture disponible sur Android 7+'),
+                ],
+              ),
+            ),
+            if (_playbackError != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: Text(
+                  _playbackError!,
+                  style: TextStyle(color: theme.colorScheme.error),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: SelectableText(
+                resultUrl,
+                style: Theme.of(context).textTheme.labelSmall,
+                maxLines: 1,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
+
+  (int, int) _pitchRange(List<MidiNote> notes) {
+    final lowest =
+        notes.map((note) => note.pitch).reduce((a, b) => a < b ? a : b);
+    final highest =
+        notes.map((note) => note.pitch).reduce((a, b) => a > b ? a : b);
+    var low = (lowest ~/ 12) * 12;
+    var high = ((highest ~/ 12) + 1) * 12;
+    if (high - low < 24) {
+      low = ((low - 12) ~/ 12) * 12;
+      high = low + 24;
+    }
+    if (low < 24) {
+      high += 24 - low;
+      low = 24;
+    }
+    if (high > 108) {
+      low -= high - 108;
+      high = 108;
+    }
+    return (low, high);
+  }
+}
+
+class _ScorePreview extends StatefulWidget {
+  const _ScorePreview({required this.filePath, required this.isPdf});
+
+  final String? filePath;
+  final bool isPdf;
+
+  @override
+  State<_ScorePreview> createState() => _ScorePreviewState();
+}
+
+class _ScorePreviewState extends State<_ScorePreview> {
+  late final Future<Uint8List> _pdfPreview = _renderFirstPdfPage();
+
+  Future<Uint8List> _renderFirstPdfPage() async {
+    final document = await PdfDocument.openFile(widget.filePath!);
+    PdfPage? page;
+    try {
+      page = await document.getPage(1);
+      final rendered = await page.render(
+        width: page.width * 2,
+        height: page.height * 2,
+        format: PdfPageImageFormat.png,
+        backgroundColor: '#FFFFFF',
+      );
+      if (rendered == null) {
+        throw StateError('Le rendu de la première page PDF a échoué.');
+      }
+      return rendered.bytes;
+    } finally {
+      if (page != null) await page.close();
+      await document.close();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filePath = widget.filePath;
+    return Container(
+      width: double.infinity,
+      color: Colors.white,
+      child: filePath == null
+          ? const Center(
+              child: Text(
+                'Aperçu de la partition non disponible',
+                style: TextStyle(color: Colors.black54),
+              ),
+            )
+          : widget.isPdf
+              ? FutureBuilder<Uint8List>(
+                  future: _pdfPreview,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text(
+                          'Impossible d’afficher le PDF : ${snapshot.error}',
+                          style: const TextStyle(color: Colors.black54),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }
+                    if (!snapshot.hasData) {
+                      return const Center(
+                        child: CircularProgressIndicator(),
+                      );
+                    }
+                    return Image.memory(
+                      snapshot.data!,
+                      fit: BoxFit.cover,
+                      alignment: Alignment.center,
+                      width: double.infinity,
+                      height: double.infinity,
+                    );
+                  },
+                )
+              : Image.file(
+                  File(filePath),
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                  width: double.infinity,
+                  height: double.infinity,
+                  errorBuilder: (context, error, stackTrace) => Center(
+                    child: Text(
+                      'Impossible d’afficher l’image : $error',
+                      style: const TextStyle(color: Colors.black54),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+    );
+  }
+}
+
+class _PianoRoll extends StatelessWidget {
+  const _PianoRoll({
+    required this.notes,
+    required this.ticksPerBeat,
+    required this.currentTick,
+    required this.lowPitch,
+    required this.highPitch,
+  });
+
+  final List<MidiNote> notes;
+  final int ticksPerBeat;
+  final int currentTick;
+  final int lowPitch;
+  final int highPitch;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFF090A0E),
+      child: CustomPaint(
+        painter: _PianoRollPainter(
+          notes: notes,
+          ticksPerBeat: ticksPerBeat,
+          currentTick: currentTick,
+          lowPitch: lowPitch,
+          highPitch: highPitch,
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+class _PianoRollPainter extends CustomPainter {
+  const _PianoRollPainter({
+    required this.notes,
+    required this.ticksPerBeat,
+    required this.currentTick,
+    required this.lowPitch,
+    required this.highPitch,
+  });
+
+  final List<MidiNote> notes;
+  final int ticksPerBeat;
+  final int currentTick;
+  final int lowPitch;
+  final int highPitch;
+
+  static const _colors = [
+    Color(0xFF73B7FF),
+    Color(0xFF9BE640),
+    Color(0xFFFFB74D),
+    Color(0xFFCE93D8),
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final pitchWidth = size.width / (highPitch - lowPitch);
+    final hitLine = size.height * 0.9;
+    final visibleTicks = ticksPerBeat * 8;
+    final gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.12)
+      ..strokeWidth = 1;
+
+    for (var pitch = lowPitch; pitch <= highPitch; pitch++) {
+      final x = (pitch - lowPitch) * pitchWidth;
+      canvas.drawLine(Offset(x, 0), Offset(x, hitLine), gridPaint);
+    }
+    for (var beat = 0; beat <= 8; beat++) {
+      final y = hitLine - (beat / 8) * hitLine;
+      canvas.drawLine(
+        Offset(0, y),
+        Offset(size.width, y),
+        gridPaint..strokeWidth = beat % 4 == 0 ? 1.5 : 0.7,
+      );
+    }
+
+    final notePaint = Paint()..style = PaintingStyle.fill;
+    for (final note in notes) {
+      if (note.pitch < lowPitch ||
+          note.pitch >= highPitch ||
+          note.endTick < currentTick ||
+          note.startTick > currentTick + visibleTicks) {
+        continue;
+      }
+      final startOffset = note.startTick - currentTick;
+      final duration = note.endTick - note.startTick;
+      final bottom = hitLine - (startOffset / visibleTicks) * hitLine;
+      final top = bottom - (duration / visibleTicks) * hitLine;
+      final rect = Rect.fromLTRB(
+        (note.pitch - lowPitch) * pitchWidth + 2,
+        top.clamp(0, hitLine).toDouble(),
+        (note.pitch - lowPitch + 1) * pitchWidth - 2,
+        bottom.clamp(0, hitLine).toDouble(),
+      );
+      if (rect.height <= 0 || rect.width <= 0) continue;
+
+      notePaint.color = _colors[note.channel % _colors.length]
+          .withValues(alpha: 0.55 + note.velocity / 280);
+      final radius = Radius.circular(pitchWidth.clamp(2, 8).toDouble());
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, radius),
+        notePaint,
+      );
+      if (rect.height > 22 && rect.width > 24) {
+        final label = TextPainter(
+          text: TextSpan(
+            text: _noteName(note.pitch),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: rect.width - 4);
+        label.paint(
+          canvas,
+          Offset(rect.left + 2, rect.top + rect.height - label.height - 2),
+        );
+      }
+    }
+
+    final hitPaint = Paint()
+      ..color = Colors.pinkAccent
+      ..strokeWidth = 2;
+    canvas.drawLine(
+      Offset(0, hitLine),
+      Offset(size.width, hitLine),
+      hitPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_PianoRollPainter oldDelegate) =>
+      oldDelegate.currentTick != currentTick ||
+      oldDelegate.notes != notes ||
+      oldDelegate.lowPitch != lowPitch ||
+      oldDelegate.highPitch != highPitch;
+
+  String _noteName(int pitch) {
+    const names = [
+      'C',
+      'C#',
+      'D',
+      'D#',
+      'E',
+      'F',
+      'F#',
+      'G',
+      'G#',
+      'A',
+      'A#',
+      'B'
+    ];
+    return '${names[pitch % 12]}${pitch ~/ 12 - 1}';
+  }
+}
+
+class _PianoKeyboard extends StatelessWidget {
+  const _PianoKeyboard({
+    required this.lowPitch,
+    required this.highPitch,
+    required this.activePitches,
+  });
+
+  final int lowPitch;
+  final int highPitch;
+  final Set<int> activePitches;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _PianoKeyboardPainter(
+        lowPitch: lowPitch,
+        highPitch: highPitch,
+        activePitches: activePitches,
+      ),
+      child: const SizedBox.expand(),
+    );
+  }
+}
+
+class _PianoKeyboardPainter extends CustomPainter {
+  const _PianoKeyboardPainter({
+    required this.lowPitch,
+    required this.highPitch,
+    required this.activePitches,
+  });
+
+  final int lowPitch;
+  final int highPitch;
+  final Set<int> activePitches;
+
+  static const _blackKeyClasses = {1, 3, 6, 8, 10};
+  static const _whiteKeyClasses = {0, 2, 4, 5, 7, 9, 11};
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final whitePitches = [
+      for (var pitch = lowPitch; pitch < highPitch; pitch++)
+        if (_whiteKeyClasses.contains(pitch % 12)) pitch,
+    ];
+    if (whitePitches.isEmpty) return;
+
+    final whiteWidth = size.width / whitePitches.length;
+    final whitePaint = Paint()..style = PaintingStyle.fill;
+    for (var index = 0; index < whitePitches.length; index++) {
+      final pitch = whitePitches[index];
+      whitePaint.color = activePitches.contains(pitch)
+          ? const Color(0xFF9BE640)
+          : const Color(0xFFF7F5EF);
+      final left = index * whiteWidth;
+      canvas.drawRect(
+        Rect.fromLTWH(left, 0, whiteWidth - 1, size.height),
+        whitePaint,
+      );
+      canvas.drawLine(
+        Offset(left, 0),
+        Offset(left, size.height),
+        Paint()
+          ..color = Colors.black26
+          ..strokeWidth = 1,
+      );
+      if (pitch % 12 == 0 && whiteWidth > 13) {
+        final label = TextPainter(
+          text: TextSpan(
+            text: 'C${pitch ~/ 12 - 1}',
+            style: const TextStyle(color: Colors.black54, fontSize: 9),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: whiteWidth - 2);
+        label.paint(
+          canvas,
+          Offset(left + 2, size.height - label.height - 3),
+        );
+      }
+    }
+
+    final blackWidth = whiteWidth * 0.62;
+    final blackHeight = size.height * 0.64;
+    final blackPaint = Paint()..style = PaintingStyle.fill;
+    for (var pitch = lowPitch; pitch < highPitch; pitch++) {
+      if (!_blackKeyClasses.contains(pitch % 12)) continue;
+      final previousWhiteCount =
+          whitePitches.where((whitePitch) => whitePitch < pitch).length;
+      final left = previousWhiteCount * whiteWidth - blackWidth / 2;
+      blackPaint.color = activePitches.contains(pitch)
+          ? const Color(0xFF67C92D)
+          : const Color(0xFF101116);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(left, 0, blackWidth, blackHeight),
+          const Radius.circular(2),
+        ),
+        blackPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PianoKeyboardPainter oldDelegate) =>
+      oldDelegate.activePitches != activePitches ||
+      oldDelegate.lowPitch != lowPitch ||
+      oldDelegate.highPitch != highPitch;
 }

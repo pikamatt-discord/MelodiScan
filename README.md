@@ -54,7 +54,7 @@ Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 | **API Backend (FastAPI)** | Prototype | Envoi d’une image ou d’un PDF par tâche, suivi SSE, téléchargement MIDI uniquement après succès, statistiques et état de santé des dépendances. |
 | **Moteur OMR** | Intégré à l’image | Audiveris 5.10.0 est installé dans l’image Docker du backend/worker. Toute erreur OMR ou de conversion marque la tâche en échec ; aucun moteur de secours ni partition synthétique. |
 | **Dashboard serveur** | Opérationnel | Statistiques de numérisation, état API/Redis/worker/Audiveris/générateur APK, historique filtrable, téléchargement MIDI et génération réelle d’un APK Release à la demande. |
-| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, envoi au serveur, suivi SSE et vérification/récupération du fichier MIDI. La lecture audio intégrée et le prétraitement d’image ne sont pas implémentés. |
+| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, suivi SSE, aperçu de la partition, visualiseur piano roll avec clavier, et lecture MIDI sur Android 7+. Le prétraitement d’image n’est pas implémenté. |
 | **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Audiveris. |
 | **Tests automatisés** | En cours | Tests ciblés backend et Flutter ; exécuter les commandes de test ci-dessous dans des environnements munis de leurs dépendances. |
 
@@ -76,8 +76,8 @@ Pour transformer l'environnement actuel de développement/démonstration en une 
 1. **Optimisation Mémoire de la JVM Headless :** Configurer les limites Xmx/Xms du JVM Java pour libérer automatiquement la RAM de la JVM (< 512 Mo au repos) après inactivité.
 2. **Gestionnaire de Cache Redis Persistant :** Monter un volume persistant Redis (`appendonly yes`) pour conserver l'historique complet des partitions numérisées au redémarrage du serveur.
 
-#### D. Audio Engine Native Native Binding (SoundFont FFI Engine)
-1. **Compilation FFI `libfluidsynth` C++ :** Compiler les bindings natifs FFI C++ de `libfluidsynth` pour Android / iOS afin de jouer directement des banques SoundFont `.sf2` haute fidélité sur le terminal mobile sans passer par le synthétiseur système.
+#### D. Lecture Audio Mobile
+1. **Lecture MIDI sur iOS :** Le lecteur de fichiers MIDI intégré fonctionne actuellement sur Android 7+ ; ajouter la lecture de fichiers MIDI sur iOS.
 
 ---
 

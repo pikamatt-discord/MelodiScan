@@ -17,6 +17,9 @@ dependencies:
   image_picker: ^1.0.7
   cupertino_icons: ^1.0.8
   file_picker: 8.1.7
+  flutter_midi_pro: 4.0.4
+  pdfx: 2.11.0
+  dart_midi_pro: 1.0.4+2
 
 dev_dependencies:
   flutter_test:
@@ -25,3 +28,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/soundfonts/VintageDreamsWaves-v2.sf2
