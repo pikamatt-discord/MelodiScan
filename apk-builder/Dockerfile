@@ -1,4 +1,4 @@
-FROM ghcr.io/cirruslabs/flutter:3.44.0
+FROM ghcr.io/cirruslabs/flutter:3.38.7
 
 USER root
 WORKDIR /workspace/mobile
