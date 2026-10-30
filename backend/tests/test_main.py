@@ -184,10 +184,23 @@ def test_omr_engine_reports_audiveris_failure(tmp_path, monkeypatch):
     class ProcessResult:
         returncode = 1
         stderr = b"invalid score"
+        stdout = b""
 
     monkeypatch.setattr("app.omr_engine.subprocess.run", lambda *args, **kwargs: ProcessResult())
 
     with pytest.raises(OMRProcessingError, match="invalid score"):
+        OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
+
+
+def test_omr_engine_includes_stdout_when_audiveris_stderr_is_empty(tmp_path, monkeypatch):
+    class ProcessResult:
+        returncode = 1
+        stderr = b""
+        stdout = b"Could not read the input score"
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", lambda *args, **kwargs: ProcessResult())
+
+    with pytest.raises(OMRProcessingError, match="Could not read the input score"):
         OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
 
 

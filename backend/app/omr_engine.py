@@ -28,7 +28,11 @@ class OMREngine:
             raise OMRProcessingError(f"Could not run Audiveris: {exc}") from exc
 
         if res.returncode != 0:
-            error = res.stderr.decode("utf-8", errors="replace").strip()
+            error = "\n".join(
+                output.decode("utf-8", errors="replace").strip()
+                for output in (res.stderr, res.stdout)
+                if output
+            ).strip()
             detail = error[-500:] if error else "No diagnostic was returned."
             raise OMRProcessingError(f"Audiveris failed with exit code {res.returncode}: {detail}")
         if not os.path.isfile(output_musicxml) or os.path.getsize(output_musicxml) == 0:
