@@ -115,7 +115,7 @@ def convert_musicxml_to_midi(musicxml_path: str, midi_output_path: str) -> str:
     try:
         import partitura
         score = partitura.load_musicxml(musicxml_path)
-        partitura.save_parscore_midi(score, midi_output_path)
+        partitura.save_score_midi(score, midi_output_path)
         if not os.path.isfile(midi_output_path) or os.path.getsize(midi_output_path) < 22:
             raise OMRProcessingError("MusicXML conversion completed without producing a valid MIDI file.")
         with open(midi_output_path, "rb") as midi_file:

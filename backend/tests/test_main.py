@@ -602,6 +602,35 @@ def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path, monkeypat
     assert not midi_path.exists()
 
 
+def test_musicxml_conversion_uses_partitura_score_midi_export(tmp_path, monkeypatch):
+    partitura = ModuleType("partitura")
+    score = object()
+    midi_path = tmp_path / "score.mid"
+    midi_content = (
+        b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x00\x60"
+        b"MTrk\x00\x00\x00\x04\x00\xff\x2f\x00"
+    )
+    saved_scores = []
+
+    partitura.load_musicxml = lambda _path: score
+
+    def save_score_midi(received_score, output_path):
+        saved_scores.append(received_score)
+        with open(output_path, "wb") as midi_file:
+            midi_file.write(midi_content)
+
+    partitura.save_score_midi = save_score_midi
+    monkeypatch.setitem(sys.modules, "partitura", partitura)
+
+    result = convert_musicxml_to_midi(
+        str(tmp_path / "score.musicxml"), str(midi_path)
+    )
+
+    assert result == str(midi_path)
+    assert saved_scores == [score]
+    assert midi_path.read_bytes() == midi_content
+
+
 def test_result_requires_completed_task(tmp_path):
     set_task_state("queued-task", {"status": "STATUS_QUEUED"})
     set_task_state("failed-task", {
