@@ -1,3 +1,7 @@
+{
+	default_sni {$MELODISCAN_HOST:melodiscan.home.arpa}
+}
+
 {$MELODISCAN_HOST:melodiscan.home.arpa}, localhost {
 	tls internal
 	reverse_proxy melodiscan-api:8080

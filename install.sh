@@ -136,7 +136,9 @@ if [[ "$ca_ready" != true ]]; then
   compose logs --tail=40 melodiscan-https >&2 || true
   fail "Le certificat racine Caddy n'a pas été généré après 30 secondes."
 fi
-printf 'Certificat HTTPS récupéré. Vérification des services...\n'
+printf 'Certificat HTTPS récupéré. Rechargement de Caddy et du générateur avec la CA...\n'
+compose up -d --force-recreate melodiscan-https melodiscan-apk-builder
+printf 'Caddy et le générateur redémarrés. Vérification des services...\n'
 
 BASE_URL="https://${LAN_IP}"
 HEALTH_URL="${BASE_URL}/health"
