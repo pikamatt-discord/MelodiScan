@@ -88,6 +88,25 @@
             overflow-wrap: anywhere;
         }
         .error { color: var(--error); }
+        #input-preview {
+            margin-top: 16px;
+            padding: 14px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #0a0c11;
+        }
+        #input-preview h2 { margin-bottom: 10px; }
+        #input-preview-meta { margin-bottom: 10px; }
+        #input-preview img, #input-preview iframe {
+            display: block;
+            width: 100%;
+            max-height: 65vh;
+            border: 0;
+            border-radius: 6px;
+            background: white;
+            object-fit: contain;
+        }
+        #input-preview iframe { height: 65vh; }
         @media (max-width: 760px) {
             body { padding: 18px 12px; }
             header { align-items: flex-start; flex-direction: column; }
@@ -116,6 +135,11 @@
         <section class="panel">
             <h2 id="log-title">Sélectionnez un échec</h2>
             <div id="log-meta" class="muted" style="margin-top: 7px;"></div>
+            <div id="input-preview">
+                <h2>Fichier reçu par le serveur</h2>
+                <div id="input-preview-meta" class="muted">Sélectionnez un échec pour afficher son fichier.</div>
+                <div id="input-preview-content"></div>
+            </div>
             <pre id="diagnostics" class="muted">Les diagnostics apparaîtront ici.</pre>
         </section>
     </div>
@@ -156,12 +180,43 @@
         const output = document.getElementById('diagnostics');
         output.classList.remove('error');
         output.textContent = 'Chargement des diagnostics…';
+        const previewMeta = document.getElementById('input-preview-meta');
+        const previewContent = document.getElementById('input-preview-content');
+        previewMeta.textContent = 'Chargement du fichier reçu…';
+        previewContent.replaceChildren();
         try {
             const details = await apiRequest(`/api/v1/tasks/${encodeURIComponent(taskId)}/logs`);
             output.textContent = details.logs;
+            const preview = details.input_preview;
+            if (!preview) {
+                previewMeta.textContent = 'Le fichier reçu n’est plus disponible pour cette tâche.';
+            } else {
+                previewMeta.textContent =
+                    `${preview.filename} · ${Number(preview.size_bytes).toLocaleString('fr-FR')} octets`;
+                if (preview.media_type === 'application/pdf') {
+                    const frame = document.createElement('iframe');
+                    frame.title = 'PDF reçu par le serveur';
+                    frame.src = preview.url;
+                    previewContent.append(frame);
+                } else if (preview.media_type.startsWith('image/')) {
+                    const image = document.createElement('img');
+                    image.alt = 'Image reçue par le serveur';
+                    image.onload = () => {
+                        previewMeta.textContent += ` · ${image.naturalWidth} × ${image.naturalHeight} px`;
+                    };
+                    image.onerror = () => {
+                        previewMeta.textContent = 'Impossible d’afficher le fichier image reçu.';
+                    };
+                    image.src = preview.url;
+                    previewContent.append(image);
+                } else {
+                    previewMeta.textContent = 'Format de fichier non affichable.';
+                }
+            }
         } catch (error) {
             output.textContent = error.message;
             output.classList.add('error');
+            previewMeta.textContent = 'Impossible de charger le fichier reçu.';
         }
     }
 

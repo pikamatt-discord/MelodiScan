@@ -32,6 +32,12 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 20 * 1024 * 1024))
 TASK_TIMEOUT_SECONDS = int(os.getenv("TASK_TIMEOUT_SECONDS", 600))
 APK_BUILDER_URL = os.getenv("APK_BUILDER_URL", "http://melodiscan-apk-builder:8090")
 MELODISCAN_HOST = os.getenv("MELODISCAN_HOST", "")
+SCORE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
 CORS_ALLOW_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
@@ -282,6 +288,17 @@ async def get_task_logs(task_id: str):
     if task.get("status") != "STATUS_FAILED":
         raise HTTPException(status_code=409, detail="Detailed diagnostics are available only for failed tasks.")
 
+    input_path = task.get("file_path")
+    extension = os.path.splitext(input_path or "")[1].lower()
+    input_preview = None
+    if extension in SCORE_MEDIA_TYPES and input_path and os.path.isfile(input_path):
+        input_preview = {
+            "url": f"/api/v1/tasks/{task_id}/input",
+            "filename": os.path.basename(input_path),
+            "media_type": SCORE_MEDIA_TYPES[extension],
+            "size_bytes": os.path.getsize(input_path),
+        }
+
     return {
         "task_id": task_id,
         "title": task.get("title") or "Partition sans titre",
@@ -290,7 +307,31 @@ async def get_task_logs(task_id: str):
         "failed_at": task.get("failed_at"),
         "summary": task.get("error_summary") or TASK_FAILURE_SUMMARY,
         "logs": task.get("error") or "Aucun diagnostic détaillé n’a été enregistré.",
+        "input_preview": input_preview,
     }
+
+
+@app.get("/api/v1/tasks/{task_id}/input")
+async def get_task_input(task_id: str):
+    task = get_task_state(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if task.get("status") != "STATUS_FAILED":
+        raise HTTPException(status_code=409, detail="Uploaded input is retained only for failed tasks.")
+
+    input_path = task.get("file_path")
+    extension = os.path.splitext(input_path or "")[1].lower()
+    if extension not in SCORE_MEDIA_TYPES or not input_path or not os.path.isfile(input_path):
+        raise HTTPException(status_code=404, detail="The received file is no longer available.")
+
+    return FileResponse(
+        input_path,
+        media_type=SCORE_MEDIA_TYPES[extension],
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.get("/api/v1/apk/status")

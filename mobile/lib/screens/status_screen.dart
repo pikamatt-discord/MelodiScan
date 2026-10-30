@@ -92,8 +92,10 @@ class _StatusScreenState extends State<StatusScreen> {
 
       final status = data['status'];
       if (status == 'STATUS_FAILED') {
-        _setError(
-            'Le traitement a échoué. Consultez les diagnostics dans le dashboard.');
+        final error = data['error'];
+        _setError(error is String && error.isNotEmpty
+            ? error
+            : 'Le traitement a échoué. Consultez les diagnostics dans le dashboard.');
       } else if (status is String && _stages.contains(status) && mounted) {
         setState(() {
           _currentStageIndex = _stages.indexOf(status);

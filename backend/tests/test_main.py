@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -163,23 +164,32 @@ def test_dashboard_exposes_management_views_and_apk_generation():
     assert "/dashboard/logs" in response.text
 
 
-def test_dashboard_logs_page_and_task_log_endpoint():
+def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
+    input_path = tmp_path / "failed-log-task.png"
+    input_path.write_bytes(PNG_BYTES)
     set_task_state("failed-log-task", {
         "task_id": "failed-log-task",
         "title": "Export test",
         "status": "STATUS_FAILED",
         "error": "Detailed Audiveris export error",
+        "file_path": str(input_path),
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
     page = client.get("/dashboard/logs")
     logs = client.get("/api/v1/tasks/failed-log-task/logs")
+    received = client.get("/api/v1/tasks/failed-log-task/input")
 
     assert page.status_code == 200
     assert "Diagnostics détaillés" in page.text
+    assert "Fichier reçu par le serveur" in page.text
     assert logs.status_code == 200
     assert logs.json()["logs"] == "Detailed Audiveris export error"
     assert logs.json()["summary"] == main.TASK_FAILURE_SUMMARY
+    assert logs.json()["input_preview"]["media_type"] == "image/png"
+    assert received.status_code == 200
+    assert received.content == PNG_BYTES
+    assert received.headers["content-type"] == "image/png"
 
 
 def test_task_logs_are_only_available_for_failed_tasks():
@@ -187,9 +197,17 @@ def test_task_logs_are_only_available_for_failed_tasks():
         "task_id": "running-log-task",
         "status": "STATUS_RUNNING_OMR",
     })
+    set_task_state("failed-log-task-without-input", {
+        "task_id": "failed-log-task-without-input",
+        "status": "STATUS_FAILED",
+    })
 
     assert client.get("/api/v1/tasks/missing/logs").status_code == 404
     assert client.get("/api/v1/tasks/running-log-task/logs").status_code == 409
+    assert client.get("/api/v1/tasks/running-log-task/input").status_code == 409
+    assert client.get(
+        "/api/v1/tasks/failed-log-task-without-input/input"
+    ).status_code == 404
 
 
 def test_scan_rejects_non_image_upload():
@@ -331,6 +349,43 @@ def test_worker_persists_processing_error(tmp_path, monkeypatch):
     assert task["status"] == "STATUS_FAILED"
     assert task["error"] == "Audiveris unavailable"
     assert task["failed_at"]
+
+
+def test_worker_explains_audiveris_low_interline_failure(tmp_path, monkeypatch):
+    from app.tasks import process_omr_task
+
+    set_task_state("low-interline-task", {
+        "task_id": "low-interline-task",
+        "status": "STATUS_QUEUED",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    input_path = tmp_path / "score.png"
+    input_path.write_bytes(PNG_BYTES)
+
+    diagnostic = (
+        "With a too low interline value of 6 pixels. "
+        "Created scores: [] Could not export since transcription did not complete successfully"
+    )
+    monkeypatch.setattr(
+        "app.tasks.OMREngine.process_score",
+        lambda *_args: (_ for _ in ()).throw(OMRProcessingError(diagnostic)),
+    )
+
+    with pytest.raises(OMRProcessingError, match="too low interline value"):
+        process_omr_task.run(
+            "low-interline-task", str(input_path), "Test"
+        )
+
+    task = get_task_state("low-interline-task")
+    assert "6 pixels" in task["error_summary"]
+    assert "photo peut être nette" in task["error_summary"]
+    assert task["error"] == diagnostic
+    assert input_path.read_bytes() == PNG_BYTES
+    stream = client.get("/api/v1/stream/low-interline-task").text
+    assert task["error_summary"] in json.loads(stream[6:])["error"]
+    assert client.get(
+        "/api/v1/tasks/low-interline-task/logs"
+    ).json()["summary"] == task["error_summary"]
 
 
 def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path, monkeypatch):

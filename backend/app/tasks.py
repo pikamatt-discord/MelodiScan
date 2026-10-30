@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from datetime import datetime, timezone
 from celery import Celery
 from app.omr_engine import OMREngine, convert_musicxml_to_midi
@@ -14,6 +15,24 @@ celery_app = Celery(
 
 logger = logging.getLogger(__name__)
 
+
+def _error_summary(error: Exception, default: str) -> str:
+    diagnostic = str(error)
+    interline = re.search(
+        r"too low interline value of\s+(\d+)\s+pixels",
+        diagnostic,
+        re.IGNORECASE,
+    )
+    if interline and "Created scores: []" in diagnostic:
+        return (
+            "Aucune portée détectée : Audiveris mesure seulement "
+            f"{interline.group(1)} pixels entre les lignes. La photo peut être nette, "
+            "mais sa définition reste trop faible pour cette analyse. Essayez le "
+            "PDF original ou un scan en 300 DPI."
+        )
+    return default
+
+
 @celery_app.task(name="app.tasks.process_omr_task")
 def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
     from app.main import TASK_FAILURE_SUMMARY, get_task_state, set_task_state
@@ -25,6 +44,7 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
     if state.get("status") == "STATUS_FAILED":
         return state
 
+    preserve_upload = False
     try:
         state["status"] = "STATUS_PROCESSING_IMAGE"
         set_task_state(task_id, state)
@@ -53,19 +73,21 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
         set_task_state(task_id, state)
         return state
     except Exception as exc:
+        preserve_upload = True
         logger.exception("OMR task %s failed.", task_id)
         state.update({
             "status": "STATUS_FAILED",
             "error": str(exc)[:4500],
-            "error_summary": TASK_FAILURE_SUMMARY,
+            "error_summary": _error_summary(exc, TASK_FAILURE_SUMMARY),
             "failed_at": datetime.now(timezone.utc).isoformat(),
         })
         set_task_state(task_id, state)
         raise
     finally:
-        try:
-            os.remove(score_path)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            logger.exception("Could not remove uploaded score file for task %s.", task_id)
+        if not preserve_upload:
+            try:
+                os.remove(score_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.exception("Could not remove uploaded score file for task %s.", task_id)

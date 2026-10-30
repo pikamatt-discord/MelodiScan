@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,8 +39,13 @@ void main() {
   testWidgets(
       'StatusScreen displays concise processing errors without simulating completion',
       (tester) async {
-    final client = MockClient((_) async => http.Response(
-          'data: {"task_id":"task-2","status":"STATUS_FAILED","error":"Audiveris unavailable"}\n\n',
+    const errorSummary = 'Aucune portée détectée : Audiveris mesure seulement '
+        '6 pixels entre les lignes. La photo peut être nette, mais sa définition '
+        'reste trop faible pour cette analyse.';
+    final client = MockClient((_) async => http.Response.bytes(
+          utf8.encode(
+            'data: {"task_id":"task-2","status":"STATUS_FAILED","error":"$errorSummary"}\n\n',
+          ),
           200,
           headers: {'content-type': 'text/event-stream'},
         ));
@@ -57,11 +64,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      find.text(
-          'Le traitement a échoué. Consultez les diagnostics dans le dashboard.'),
-      findsOneWidget,
-    );
+    expect(find.text(errorSummary), findsOneWidget);
     expect(find.text('ÉCHEC'), findsOneWidget);
     expect(find.text('Voir le résultat MIDI'), findsNothing);
   });
