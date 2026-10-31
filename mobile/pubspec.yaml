@@ -21,6 +21,7 @@ dependencies:
   flutter_midi_pro: 4.0.4
   pdfx: 2.11.0
   dart_midi_pro: 1.0.4+2
+  shared_preferences: ^2.5.3
   xml: ^6.6.1
 
 dev_dependencies:

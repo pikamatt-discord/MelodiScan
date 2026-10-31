@@ -37,6 +37,8 @@ class _StatusScreenState extends State<StatusScreen> {
   int _currentStageIndex = 0;
   bool _isCompleted = false;
   String? _errorMessage;
+  String? _detectedTitle;
+  Map<String, dynamic>? _scoreMetadata;
   StreamSubscription<String>? _streamSubscription;
   bool _isConnecting = true;
 
@@ -95,6 +97,20 @@ class _StatusScreenState extends State<StatusScreen> {
       }
 
       final status = data['status'];
+      final title = data['title'];
+      final scoreMetadata = data['score_metadata'];
+      if (mounted &&
+          ((title is String && title.trim().isNotEmpty) ||
+              scoreMetadata is Map<String, dynamic>)) {
+        setState(() {
+          if (title is String && title.trim().isNotEmpty) {
+            _detectedTitle = title.trim();
+          }
+          if (scoreMetadata is Map<String, dynamic>) {
+            _scoreMetadata = scoreMetadata;
+          }
+        });
+      }
       if (status == 'STATUS_FAILED') {
         final error = data['error'];
         _setError(error is String && error.isNotEmpty
@@ -142,7 +158,7 @@ class _StatusScreenState extends State<StatusScreen> {
       MaterialPageRoute(
         builder: (_) => PlayerScreen(
           taskId: widget.taskId,
-          title: widget.title,
+          title: _detectedTitle ?? widget.title,
           serverUrl: widget.serverUrl,
           apiKey: widget.apiKey,
           httpClient: widget.httpClient,
@@ -213,6 +229,8 @@ class _StatusScreenState extends State<StatusScreen> {
     final theme = Theme.of(context);
     final progress = _currentStageIndex / (_stages.length - 1);
     final currentStage = _stages[_currentStageIndex];
+    final displayTitle = _detectedTitle ?? widget.title;
+    final detectedMetadata = _scoreMetadata;
     final title = _errorMessage != null
         ? 'Traitement interrompu'
         : _isCompleted
@@ -226,7 +244,7 @@ class _StatusScreenState extends State<StatusScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Traitement : ${widget.title}'),
+        title: Text('Traitement : $displayTitle'),
       ),
       body: SafeArea(
         child: Column(
@@ -411,6 +429,8 @@ class _StatusScreenState extends State<StatusScreen> {
                 ],
               ),
             ),
+            if (detectedMetadata != null)
+              _buildDetectedMetadata(theme, detectedMetadata),
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -557,5 +577,86 @@ class _StatusScreenState extends State<StatusScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildDetectedMetadata(
+    ThemeData theme,
+    Map<String, dynamic> metadata,
+  ) {
+    final parts = metadata['parts'];
+    final partEntries = parts is List ? parts.whereType<Map>().toList() : [];
+    final partNames =
+        partEntries.map((part) => part['name']).whereType<String>().toList();
+    final creators = metadata['creators'];
+    final creatorLabels = creators is List
+        ? creators
+            .whereType<Map>()
+            .map(_creatorLabel)
+            .whereType<String>()
+            .toList()
+        : <String>[];
+    final measureCount = metadata['measure_count'];
+    final tempos = metadata['tempo_changes'];
+    final firstTempo = tempos is List && tempos.isNotEmpty
+        ? tempos.first is Map
+            ? (tempos.first as Map)['bpm']
+            : null
+        : null;
+    final firstPart = partEntries.isEmpty ? null : partEntries.first;
+    final keyFifths = firstPart?['key_fifths'];
+    final meter = firstPart?['meter'];
+    final signature = <String>[
+      if (keyFifths is num) _keySignatureLabel(keyFifths.round()),
+      if (meter is Map && meter['beats'] != null && meter['beat_type'] != null)
+        '${meter['beats']}/${meter['beat_type']}',
+    ];
+    final details = <String>[
+      if (measureCount is num && measureCount > 0) '$measureCount mesures',
+      if (partNames.isNotEmpty) partNames.join(' · '),
+      if (creatorLabels.isNotEmpty) creatorLabels.join(' · '),
+      if (signature.isNotEmpty) signature.join(' · '),
+      if (firstTempo is num) '${firstTempo.round()} BPM détectés',
+    ];
+    if (details.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          dense: true,
+          leading: Icon(
+            Icons.library_music_rounded,
+            color: theme.colorScheme.secondary,
+          ),
+          title: Text(
+            _detectedTitle ?? 'Informations détectées dans la partition',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(details.join('  ·  ')),
+        ),
+      ),
+    );
+  }
+
+  String? _creatorLabel(Map creator) {
+    final name = creator['name'];
+    if (name is! String || name.trim().isEmpty) return null;
+    final role = creator['role'];
+    final label = switch (role) {
+      'composer' => 'Compositeur',
+      'lyricist' => 'Parolier',
+      'arranger' => 'Arrangeur',
+      String value when value.trim().isNotEmpty => value,
+      _ => 'Crédit',
+    };
+    return '$label : ${name.trim()}';
+  }
+
+  String _keySignatureLabel(int fifths) {
+    if (fifths == 0) return 'Sans altération';
+    final accidental = fifths > 0 ? 'dièse' : 'bémol';
+    final count = fifths.abs();
+    return '$count $accidental${count > 1 ? 's' : ''}';
   }
 }

@@ -23,13 +23,18 @@ class MidiVisualization {
     required this.notes,
     required this.ticksPerBeat,
     required this.totalTicks,
+    required this.trackCount,
   });
 
   final List<MidiNote> notes;
   final int ticksPerBeat;
   final int totalTicks;
+  final int trackCount;
 
-  factory MidiVisualization.parse(Uint8List bytes) {
+  factory MidiVisualization.parse(
+    Uint8List bytes, {
+    int? trackIndex,
+  }) {
     final midi = MidiParser().parseMidiFromBuffer(bytes);
     final ticksPerBeat = midi.header.ticksPerBeat;
     if (ticksPerBeat == null || ticksPerBeat <= 0) {
@@ -37,16 +42,29 @@ class MidiVisualization {
         'Le fichier MIDI utilise une division temporelle non prise en charge.',
       );
     }
+    if (trackIndex != null &&
+        (trackIndex < 0 || trackIndex >= midi.tracks.length)) {
+      throw RangeError.range(
+        trackIndex,
+        0,
+        midi.tracks.length - 1,
+        'trackIndex',
+      );
+    }
 
     final notes = <MidiNote>[];
     var totalTicks = 0;
 
-    for (final track in midi.tracks) {
+    for (var currentTrackIndex = 0;
+        currentTrackIndex < midi.tracks.length;
+        currentTrackIndex++) {
+      final track = midi.tracks[currentTrackIndex];
       var tick = 0;
       final pendingNotes = <(int, int), List<(int, int)>>{};
 
       for (final event in track) {
         tick += event.deltaTime;
+        if (trackIndex != null && currentTrackIndex != trackIndex) continue;
 
         if (event is NoteOnEvent && event.velocity > 0) {
           final key = (event.channel, event.noteNumber);
@@ -75,6 +93,7 @@ class MidiVisualization {
       }
 
       if (tick > totalTicks) totalTicks = tick;
+      if (trackIndex != null && currentTrackIndex != trackIndex) continue;
       for (final entry in pendingNotes.entries) {
         for (final (startTick, velocity) in entry.value) {
           notes.add(MidiNote(
@@ -99,6 +118,7 @@ class MidiVisualization {
       notes: List.unmodifiable(notes),
       ticksPerBeat: ticksPerBeat,
       totalTicks: totalTicks,
+      trackCount: midi.tracks.length,
     );
   }
 }

@@ -891,7 +891,7 @@ async def download_apk():
 @app.post("/api/v1/scan", response_model=ScanResponse)
 async def scan_score(
     file: UploadFile = File(...),
-    title: str = Form("Untitled Score", max_length=200)
+    title: str = Form("", max_length=200)
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -931,7 +931,8 @@ async def scan_score(
     now = datetime.now(timezone.utc).isoformat()
     task_info = {
         "task_id": task_id,
-        "title": title.strip() or "Untitled Score",
+        "title": title.strip() or "Analyse de la partition",
+        "user_title": title.strip() or None,
         "status": "STATUS_QUEUED",
         "created_at": now,
         "file_path": temp_file_path,
@@ -942,7 +943,11 @@ async def scan_score(
 
     try:
         from app.tasks import process_omr_task
-        process_omr_task.delay(task_id, temp_file_path, title)
+        process_omr_task.delay(
+            task_id,
+            temp_file_path,
+            task_info["user_title"] or "",
+        )
     except Exception as exc:
         logger.exception("Could not enqueue scan task %s.", task_id)
         task_info.update({
@@ -1001,6 +1006,8 @@ async def stream_task_status(task_id: str):
                     "task_id": task_id,
                     "status": current_status,
                     "progress": progress_by_status.get(current_status, 0.0),
+                    "title": task_info.get("title"),
+                    "score_metadata": task_info.get("score_metadata"),
                     "error": (
                         task_info.get("error_summary") or TASK_FAILURE_SUMMARY
                         if current_status == "STATUS_FAILED"

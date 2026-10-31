@@ -27,8 +27,7 @@ class _ScanScreenState extends State<ScanScreen> {
   String? _selectedFileName;
   bool _selectedFileIsPdf = false;
   final ImagePicker _picker = ImagePicker();
-  final TextEditingController _titleController =
-      TextEditingController(text: 'Ma Partition Numérisée');
+  final TextEditingController _titleController = TextEditingController();
   final TextEditingController _serverUrlController = TextEditingController(
     text: const String.fromEnvironment(
       'MELODISCAN_API_URL',
@@ -123,7 +122,7 @@ class _ScanScreenState extends State<ScanScreen> {
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('$serverUrl/api/v1/scan'),
-      )..fields['title'] = title.isEmpty ? 'Untitled Score' : title;
+      )..fields['title'] = title;
       final apiKey = _apiKeyController.text.trim();
       if (apiKey.isNotEmpty) {
         request.headers['X-API-Key'] = apiKey;
@@ -159,7 +158,7 @@ class _ScanScreenState extends State<ScanScreen> {
         MaterialPageRoute(
           builder: (_) => StatusScreen(
             taskId: body['task_id'] as String,
-            title: title.isEmpty ? 'Untitled Score' : title,
+            title: title.isEmpty ? 'Analyse de la partition' : title,
             serverUrl: serverUrl,
             apiKey: apiKey,
             httpClient: client,
@@ -206,41 +205,62 @@ class _ScanScreenState extends State<ScanScreen> {
         ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    const MelodiScanLogo(size: 56),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'MelodiScan',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Reconnaissance OMR d’une image ou d’un PDF',
-                            style: TextStyle(
-                                color: Colors.grey.shade400, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    theme.colorScheme.primary.withValues(alpha: 0.22),
+                    theme.colorScheme.surface,
                   ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+              ),
+              child: Row(
+                children: [
+                  const MelodiScanLogo(size: 54),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Donnez vie à vos partitions',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          'Importez un document et transformez-le en musique.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: Colors.white70,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 22),
+            const _ScanSectionHeading(
+              icon: Icons.tune_rounded,
+              title: 'Connexion et informations',
+              subtitle: 'Configurez le serveur et le titre de secours.',
+            ),
+            const SizedBox(height: 10),
             Card(
+              margin: EdgeInsets.zero,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -270,7 +290,9 @@ class _ScanScreenState extends State<ScanScreen> {
                     TextField(
                       controller: _titleController,
                       decoration: const InputDecoration(
-                        labelText: 'Titre de la partition',
+                        labelText: 'Titre (facultatif)',
+                        helperText:
+                            'Utilisé seulement si aucun titre n’est présent dans la partition.',
                         prefixIcon: Icon(Icons.music_note_rounded),
                       ),
                     ),
@@ -278,7 +300,13 @@ class _ScanScreenState extends State<ScanScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 22),
+            const _ScanSectionHeading(
+              icon: Icons.library_music_rounded,
+              title: 'Votre partition',
+              subtitle: 'Photo, image ou document PDF.',
+            ),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
@@ -289,9 +317,12 @@ class _ScanScreenState extends State<ScanScreen> {
                     icon: const Icon(Icons.camera_alt_rounded),
                     label: const Text('Prendre en photo'),
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
                       backgroundColor: theme.colorScheme.primary,
                       foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                   ),
                 ),
@@ -304,9 +335,12 @@ class _ScanScreenState extends State<ScanScreen> {
                     icon: const Icon(Icons.photo_library_rounded),
                     label: const Text('Choisir une image'),
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
                       backgroundColor: theme.colorScheme.secondary,
                       foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                   ),
                 ),
@@ -319,20 +353,44 @@ class _ScanScreenState extends State<ScanScreen> {
               label: const Text('Importer un PDF'),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
             ),
             if (hasFile) ...[
-              const SizedBox(height: 16),
-              Card(
+              const SizedBox(height: 10),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.secondary.withValues(alpha: 0.09),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: theme.colorScheme.secondary.withValues(alpha: 0.28),
+                  ),
+                ),
                 child: ListTile(
-                  leading: Icon(_selectedFileIsPdf
-                      ? Icons.picture_as_pdf_rounded
-                      : Icons.image_rounded),
-                  title: Text(_selectedFileName!,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  leading: CircleAvatar(
+                    backgroundColor:
+                        theme.colorScheme.secondary.withValues(alpha: 0.16),
+                    child: Icon(
+                      _selectedFileIsPdf
+                          ? Icons.picture_as_pdf_rounded
+                          : Icons.image_rounded,
+                      color: theme.colorScheme.secondary,
+                    ),
+                  ),
+                  title: Text(
+                    _selectedFileName!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   subtitle: Text(_selectedFileIsPdf
                       ? 'Document PDF complet'
-                      : 'Une image par traitement'),
+                      : 'Image prête à être analysée'),
                   trailing: IconButton(
                     tooltip: 'Retirer le fichier',
                     onPressed: _isUploading
@@ -342,19 +400,23 @@ class _ScanScreenState extends State<ScanScreen> {
                               _selectedFileName = null;
                               _selectedFileIsPdf = false;
                             }),
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.close_rounded),
                   ),
                 ),
               ),
             ],
             const SizedBox(height: 16),
-            Container(
-              height: 230,
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 240),
+              height: hasFile ? 200 : 218,
               decoration: BoxDecoration(
-                color: const Color(0xFF1A1F26),
+                color: theme.colorScheme.surfaceContainerLow,
                 borderRadius: BorderRadius.circular(20),
-                border:
-                    Border.all(color: theme.colorScheme.primary.withAlpha(100)),
+                border: Border.all(
+                  color: hasFile
+                      ? theme.colorScheme.secondary.withValues(alpha: 0.4)
+                      : Colors.white.withValues(alpha: 0.08),
+                ),
               ),
               child: Stack(
                 children: [
@@ -367,51 +429,66 @@ class _ScanScreenState extends State<ScanScreen> {
                         children: List.generate(
                           5,
                           (_) => Container(
-                              height: 1.5, color: Colors.white.withAlpha(50)),
+                            height: 1.5,
+                            color: Colors.white.withValues(alpha: 0.11),
+                          ),
                         ),
                       ),
                     ),
                   ),
                   Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          hasFile
-                              ? _selectedFileIsPdf
-                                  ? Icons.picture_as_pdf_rounded
-                                  : Icons.document_scanner
-                              : Icons.photo_size_select_actual_rounded,
-                          size: 52,
-                          color: theme.colorScheme.primary,
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          hasFile
-                              ? _selectedFileIsPdf
-                                  ? 'PDF prêt à être envoyé'
-                                  : 'Image prête à être envoyée'
-                              : 'Aucun fichier sélectionné',
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 6),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 20),
-                          child: Text(
-                            'La reconnaissance et la conversion sont effectuées par le serveur.',
-                            textAlign: TextAlign.center,
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 12),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child: Column(
+                        key: ValueKey(hasFile),
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary
+                                  .withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Icon(
+                              hasFile
+                                  ? _selectedFileIsPdf
+                                      ? Icons.picture_as_pdf_rounded
+                                      : Icons.document_scanner_rounded
+                                  : Icons.photo_size_select_actual_rounded,
+                              size: 30,
+                              color: theme.colorScheme.primary,
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 10),
+                          Text(
+                            hasFile
+                                ? _selectedFileIsPdf
+                                    ? 'PDF prêt à être envoyé'
+                                    : 'Image prête à être envoyée'
+                                : 'Aucun fichier sélectionné',
+                            style: theme.textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 6),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 20),
+                            child: Text(
+                              'La reconnaissance et la conversion sont effectuées par le serveur.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   if (_isUploading)
                     Container(
                       decoration: BoxDecoration(
-                        color: Colors.black.withAlpha(180),
+                        color: Colors.black.withValues(alpha: 0.78),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: const Center(
@@ -447,6 +524,47 @@ class _ScanScreenState extends State<ScanScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ScanSectionHeading extends StatelessWidget {
+  const _ScanSectionHeading({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: theme.colorScheme.primary),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: Colors.white54,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

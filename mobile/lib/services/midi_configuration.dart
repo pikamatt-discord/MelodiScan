@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dart_midi_pro/dart_midi_pro.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class GeneralMidiInstrument {
   const GeneralMidiInstrument(this.program, this.name);
@@ -157,6 +158,9 @@ class MidiPlayerConfiguration {
 
 class MidiConfiguration {
   static const _microsecondsPerMinute = 60000000;
+  static const _instrumentPreference = 'player.instrument_program';
+  static const _tempoPreference = 'player.tempo_bpm';
+  static const _volumePreference = 'player.volume_percent';
 
   static MidiPlayerConfiguration defaultsFor(Uint8List bytes) {
     final midi = MidiParser().parseMidiFromBuffer(bytes);
@@ -190,20 +194,72 @@ class MidiConfiguration {
     );
   }
 
+  static Future<MidiPlayerConfiguration> loadPreferences(
+    MidiPlayerConfiguration fallback,
+  ) async {
+    final preferences = await SharedPreferences.getInstance();
+    return MidiPlayerConfiguration(
+      instrumentProgram: (preferences.getInt(_instrumentPreference) ??
+              fallback.instrumentProgram)
+          .clamp(0, 127)
+          .toInt(),
+      tempoBpm: (preferences.getInt(_tempoPreference) ?? fallback.tempoBpm)
+          .clamp(40, 240)
+          .toInt(),
+      volumePercent:
+          (preferences.getInt(_volumePreference) ?? fallback.volumePercent)
+              .clamp(0, 100)
+              .toInt(),
+    );
+  }
+
+  static Future<void> savePreferences(
+    MidiPlayerConfiguration configuration,
+  ) async {
+    final preferences = await SharedPreferences.getInstance();
+    final savedInstrument = await preferences.setInt(
+      _instrumentPreference,
+      configuration.instrumentProgram,
+    );
+    final savedTempo = await preferences.setInt(
+      _tempoPreference,
+      configuration.tempoBpm,
+    );
+    final savedVolume = await preferences.setInt(
+      _volumePreference,
+      configuration.volumePercent,
+    );
+    if (!savedInstrument || !savedTempo || !savedVolume) {
+      throw StateError('Impossible d’enregistrer la configuration du lecteur.');
+    }
+  }
+
   static Uint8List apply(
     Uint8List bytes,
-    MidiPlayerConfiguration configuration,
-  ) {
-    final defaults = defaultsFor(bytes);
-    if (configuration.instrumentProgram == defaults.instrumentProgram &&
-        configuration.tempoBpm == defaults.tempoBpm &&
-        configuration.volumePercent == 100) {
-      return bytes;
-    }
-
+    MidiPlayerConfiguration configuration, {
+    int? selectedTrackIndex,
+  }) {
     final midi = MidiParser().parseMidiFromBuffer(bytes);
     if (midi.tracks.isEmpty) {
       throw const FormatException('Le fichier MIDI ne contient aucune piste.');
+    }
+    if (selectedTrackIndex != null &&
+        (selectedTrackIndex < 0 || selectedTrackIndex >= midi.tracks.length)) {
+      throw RangeError.range(
+        selectedTrackIndex,
+        0,
+        midi.tracks.length - 1,
+        'selectedTrackIndex',
+      );
+    }
+
+    final defaults = defaultsFor(bytes);
+    if (configuration.instrumentProgram == defaults.instrumentProgram &&
+        configuration.tempoBpm == defaults.tempoBpm &&
+        configuration.volumePercent == 100 &&
+        (selectedTrackIndex == null ||
+            midi.tracks.length == 1 && selectedTrackIndex == 0)) {
+      return bytes;
     }
 
     var initialTempo = 500000;
@@ -222,7 +278,10 @@ class MidiConfiguration {
             initialTempo = event.microsecondsPerBeat;
             hasTempoAtStart = true;
           }
-        } else if (event is NoteOnEvent && event.velocity > 0) {
+        } else if ((selectedTrackIndex == null ||
+                trackIndex == selectedTrackIndex) &&
+            event is NoteOnEvent &&
+            event.velocity > 0) {
           channelsByTrack
               .putIfAbsent(trackIndex, () => <int>{})
               .add(event.channel);
@@ -251,7 +310,28 @@ class MidiConfiguration {
 
     final volumeScale = configuration.volumePercent / 100;
     for (var trackIndex = 0; trackIndex < midi.tracks.length; trackIndex++) {
-      final track = midi.tracks[trackIndex];
+      var track = midi.tracks[trackIndex];
+      if (selectedTrackIndex != null && trackIndex != selectedTrackIndex) {
+        var deferredDelta = 0;
+        final retainedEvents = <MidiEvent>[];
+        for (final event in track) {
+          if (event.meta) {
+            event.deltaTime += deferredDelta;
+            deferredDelta = 0;
+            retainedEvents.add(event);
+          } else {
+            deferredDelta += event.deltaTime;
+          }
+        }
+        if (deferredDelta > 0) {
+          throw const FormatException(
+            'Une piste MIDI ignorée ne se termine pas par un événement méta.',
+          );
+        }
+        midi.tracks[trackIndex] = retainedEvents;
+        continue;
+      }
+
       final channels = channelsByTrack[trackIndex] ?? const <int>{};
       for (final event in track) {
         if (event is ProgramChangeMidiEvent &&

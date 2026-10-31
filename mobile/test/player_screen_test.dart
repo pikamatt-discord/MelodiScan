@@ -10,6 +10,7 @@ import 'package:melodiscan_mobile/models/midi_visualization.dart';
 import 'package:melodiscan_mobile/screens/player_screen.dart';
 import 'package:melodiscan_mobile/services/midi_configuration.dart';
 import 'package:melodiscan_mobile/services/midi_playback.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeMidiPlayback implements MidiPlayback {
   FakeMidiPlayback({this.isSupported = true});
@@ -117,9 +118,51 @@ final validMidiBytes = Uint8List.fromList([
   0,
 ]);
 
+Uint8List _multiTrackMidiBytes() => Uint8List.fromList(
+      MidiWriter().writeMidiToBuffer(
+        MidiFile(
+          [
+            [
+              TrackNameEvent()
+                ..type = 'trackName'
+                ..text = 'Flute',
+              NoteOnEvent()
+                ..channel = 0
+                ..noteNumber = 72
+                ..velocity = 90,
+              NoteOffEvent()
+                ..deltaTime = 96
+                ..channel = 0
+                ..noteNumber = 72,
+              EndOfTrackEvent(),
+            ],
+            [
+              TrackNameEvent()
+                ..type = 'trackName'
+                ..text = 'Piano',
+              NoteOnEvent()
+                ..channel = 1
+                ..noteNumber = 48
+                ..velocity = 80,
+              NoteOffEvent()
+                ..deltaTime = 96
+                ..channel = 1
+                ..noteNumber = 48,
+              EndOfTrackEvent(),
+            ],
+          ],
+          MidiHeader(format: 1, numTracks: 2, ticksPerBeat: 96),
+        ),
+      ),
+    );
+
 const validMusicXml = '''
 <?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
+  <work><work-title>Étude depuis le document</work-title></work>
+  <identification>
+    <creator type="composer">Compositrice du document</creator>
+  </identification>
   <part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list>
   <part id="P1">
     <measure number="1">
@@ -131,12 +174,14 @@ const validMusicXml = '''
         <clef number="1"><sign>G</sign><line>2</line></clef>
         <clef number="2"><sign>F</sign><line>4</line></clef>
       </attributes>
+      <direction><sound tempo="120"/></direction>
       <note>
         <pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch>
         <duration>24</duration><type>quarter</type>
       </note>
     </measure>
     <measure number="2">
+      <direction><sound tempo="90"/></direction>
       <note>
         <pitch><step>C</step><octave>3</octave></pitch>
         <duration>24</duration><type>quarter</type>
@@ -147,12 +192,40 @@ const validMusicXml = '''
 </score-partwise>
 ''';
 
+const multiPartMusicXml = '''
+<score-partwise>
+  <part-list>
+    <score-part id="P1"><part-name>Flute</part-name></score-part>
+    <score-part id="P2"><part-name>Piano</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>24</divisions></attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch>
+        <duration>24</duration><type>quarter</type></note>
+    </measure>
+  </part>
+  <part id="P2">
+    <measure number="1">
+      <attributes><divisions>24</divisions><staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch>
+        <duration>24</duration><type>quarter</type><staff>1</staff></note>
+    </measure>
+  </part>
+</score-partwise>
+''';
+
 http.Response _playerResponse(http.Request request) {
   if (request.url.path.endsWith('/musicxml')) {
     return http.Response(
       validMusicXml,
       200,
-      headers: {'content-type': 'application/vnd.recordare.musicxml+xml'},
+      headers: {
+        'content-type': 'application/vnd.recordare.musicxml+xml; charset=utf-8'
+      },
     );
   }
   return http.Response.bytes(
@@ -163,6 +236,10 @@ http.Response _playerResponse(http.Request request) {
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   test('MIDI visualization extracts note pitch and duration', () {
     final visualization = MidiVisualization.parse(validMidiBytes);
 
@@ -172,6 +249,19 @@ void main() {
     expect(visualization.notes.single.pitch, 60);
     expect(visualization.notes.single.startTick, 0);
     expect(visualization.notes.single.endTick, 96);
+  });
+
+  test('MIDI visualization can isolate one part track and retain full length',
+      () {
+    final bytes = _multiTrackMidiBytes();
+    final wholeScore = MidiVisualization.parse(bytes);
+    final piano = MidiVisualization.parse(bytes, trackIndex: 1);
+
+    expect(wholeScore.trackCount, 2);
+    expect(wholeScore.notes.map((note) => note.pitch), [72, 48]);
+    expect(piano.trackCount, 2);
+    expect(piano.notes.map((note) => note.pitch), [48]);
+    expect(piano.totalTicks, wholeScore.totalTicks);
   });
 
   test('Default playback settings preserve the original MIDI bytes', () {
@@ -261,6 +351,33 @@ void main() {
     expect(tempos.last.microsecondsPerBeat, 533334);
   });
 
+  test('Selecting a score part filters the MIDI playback track', () {
+    final filteredBytes = MidiConfiguration.apply(
+      _multiTrackMidiBytes(),
+      const MidiPlayerConfiguration(
+        instrumentProgram: 0,
+        tempoBpm: 120,
+        volumePercent: 100,
+      ),
+      selectedTrackIndex: 1,
+    );
+    final midi = MidiParser().parseMidiFromBuffer(filteredBytes);
+
+    expect(midi.tracks, hasLength(2));
+    expect(
+      midi.tracks[0].whereType<NoteOnEvent>(),
+      isEmpty,
+    );
+    expect(
+      midi.tracks[1].whereType<NoteOnEvent>().map((event) => event.noteNumber),
+      [48],
+    );
+    expect(
+      midi.tracks[1].whereType<TrackNameEvent>().single.text,
+      'Piano',
+    );
+  });
+
   testWidgets('PlayerScreen plays, pauses, and stops a verified MIDI result',
       (tester) async {
     final client = MockClient((request) async => _playerResponse(request));
@@ -282,7 +399,8 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('Symphonie No. 5'), findsNWidgets(2));
+    expect(find.text('Symphonie No. 5'), findsOneWidget);
+    expect(find.text('Étude depuis le document'), findsOneWidget);
     expect(find.textContaining('Acoustic Grand Piano'), findsOneWidget);
     expect(find.text('Partition'), findsOneWidget);
     expect(find.byKey(const Key('traditional_score_view')), findsOneWidget);
@@ -371,7 +489,7 @@ void main() {
     await tester.tap(find.byKey(const Key('save_player_configuration')));
     await tester.pumpAndSettle();
     expect(find.text('Configuration du lecteur'), findsNothing);
-    expect(find.textContaining('120 BPM'), findsOneWidget);
+    expect(find.text('120 BPM'), findsOneWidget);
     expect(find.textContaining('Bright Acoustic Piano'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('play_pause_fab')));
@@ -386,6 +504,136 @@ void main() {
           .programNumber,
       1,
     );
+  });
+
+  testWidgets('Player exposes detected tempo changes by measure',
+      (tester) async {
+    final client = MockClient((request) async => _playerResponse(request));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerScreen(
+          taskId: 'tempo_map_task',
+          title: 'Partition',
+          serverUrl: 'http://localhost:8080',
+          httpClient: client,
+          midiPlayback: FakeMidiPlayback(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('tempo_map_button')), findsOneWidget);
+    expect(find.text('120 BPM'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tempo_map_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tempos de la partition'), findsOneWidget);
+    expect(find.text('Mesure 1'), findsOneWidget);
+    expect(find.text('Mesure 2'), findsOneWidget);
+    expect(find.byKey(const Key('tempo_change_0')), findsOneWidget);
+    expect(find.byKey(const Key('tempo_change_384')), findsOneWidget);
+  });
+
+  testWidgets('Selecting a part aligns the score, piano roll, and playback',
+      (tester) async {
+    final midiBytes = _multiTrackMidiBytes();
+    final client = MockClient((request) async {
+      if (request.url.path.endsWith('/musicxml')) {
+        return http.Response(
+          multiPartMusicXml,
+          200,
+          headers: {'content-type': 'application/xml; charset=utf-8'},
+        );
+      }
+      return http.Response.bytes(midiBytes, 200);
+    });
+    final playback = FakeMidiPlayback();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerScreen(
+          taskId: 'part_selection_task',
+          title: 'Partition',
+          serverUrl: 'http://localhost:8080',
+          httpClient: client,
+          midiPlayback: playback,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    var partSelector = tester.widget<DropdownButton<String>>(
+        find.byKey(const Key('score_part_selector')));
+    expect(partSelector.value, 'P2');
+    expect(
+      MidiVisualization.parse(midiBytes, trackIndex: 1).notes.single.pitch,
+      48,
+    );
+
+    await tester.tap(find.byKey(const Key('play_pause_fab')));
+    await tester.pumpAndSettle();
+    var playedNotes = MidiParser()
+        .parseMidiFromBuffer(playback.preparedBytes!)
+        .tracks
+        .expand((track) => track)
+        .whereType<NoteOnEvent>()
+        .where((event) => event.velocity > 0)
+        .map((event) => event.noteNumber)
+        .toList();
+    expect(playedNotes, [48]);
+
+    await tester.tap(find.byKey(const Key('play_pause_fab')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('score_part_selector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Flute').last);
+    await tester.pumpAndSettle();
+
+    partSelector = tester.widget<DropdownButton<String>>(
+        find.byKey(const Key('score_part_selector')));
+    expect(partSelector.value, 'P1');
+
+    await tester.tap(find.byKey(const Key('play_pause_fab')));
+    await tester.pumpAndSettle();
+    playedNotes = MidiParser()
+        .parseMidiFromBuffer(playback.preparedBytes!)
+        .tracks
+        .expand((track) => track)
+        .whereType<NoteOnEvent>()
+        .where((event) => event.velocity > 0)
+        .map((event) => event.noteNumber)
+        .toList();
+    expect(playedNotes, [72]);
+  });
+
+  testWidgets('Player details show only metadata read from MusicXML',
+      (tester) async {
+    final client = MockClient((request) async => _playerResponse(request));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerScreen(
+          taskId: 'score_details_task',
+          title: 'Fallback title',
+          serverUrl: 'http://localhost:8080',
+          httpClient: client,
+          midiPlayback: FakeMidiPlayback(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Étude depuis le document'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('score_details_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Informations de la partition'), findsOneWidget);
+    expect(find.text('Compositrice du document'), findsOneWidget);
+    expect(find.text('composer'), findsOneWidget);
+    expect(find.text('1 bémol  ·  4/4'), findsOneWidget);
+    expect(find.text('2 portées'), findsOneWidget);
+    expect(find.text('Titre lu dans le document'), findsOneWidget);
   });
 
   testWidgets(

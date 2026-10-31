@@ -69,14 +69,58 @@ class ScoreMeasure {
       clefs[staff] ?? (staff == 2 ? ScoreClef.bass : clef);
 }
 
+class ScorePartInfo {
+  const ScorePartInfo({
+    required this.id,
+    required this.name,
+    required this.staves,
+    required this.instrumentProgram,
+  });
+
+  final String id;
+  final String name;
+  final int staves;
+  final int? instrumentProgram;
+}
+
+class ScoreCreator {
+  const ScoreCreator({
+    required this.name,
+    required this.role,
+  });
+
+  final String name;
+  final String role;
+}
+
+class ScoreTempoChange {
+  const ScoreTempoChange({
+    required this.tick,
+    required this.bpm,
+  });
+
+  final int tick;
+  final double bpm;
+}
+
 class MusicXmlScore {
   const MusicXmlScore({
     required this.measures,
     required this.ticksPerBeat,
+    required this.parts,
+    required this.selectedPartId,
+    required this.tempoChanges,
+    required this.title,
+    required this.creators,
   });
 
   final List<ScoreMeasure> measures;
   final int ticksPerBeat;
+  final List<ScorePartInfo> parts;
+  final String selectedPartId;
+  final List<ScoreTempoChange> tempoChanges;
+  final String? title;
+  final List<ScoreCreator> creators;
 
   bool get hasGrandStaff => measures.any(
         (measure) =>
@@ -86,22 +130,84 @@ class MusicXmlScore {
   factory MusicXmlScore.parse(
     String source, {
     required int ticksPerBeat,
+    String? selectedPartId,
   }) {
     if (ticksPerBeat <= 0) {
       throw const FormatException('La résolution MIDI doit être positive.');
     }
 
     final document = XmlDocument.parse(source);
+    final work = _firstChild(document.rootElement, 'work');
+    final title = _text(work ?? document.rootElement, 'work-title') ??
+        _text(document.rootElement, 'movement-title');
+    final identification = _firstChild(document.rootElement, 'identification');
+    final creators = <ScoreCreator>[
+      if (identification != null)
+        for (final creator in _children(identification, 'creator'))
+          if (creator.innerText.trim().isNotEmpty)
+            ScoreCreator(
+              name: creator.innerText.trim(),
+              role: creator.getAttribute('type')?.trim().isNotEmpty == true
+                  ? creator.getAttribute('type')!.trim()
+                  : 'creator',
+            ),
+    ];
     final parts = _children(document.rootElement, 'part').toList();
     if (parts.isEmpty) {
       throw const FormatException(
         'Le MusicXML ne contient aucune partie musicale.',
       );
     }
-    final part = parts.firstWhere(
-      _hasMultipleStaves,
-      orElse: () => parts.first,
-    );
+    final partNames = <String, String>{};
+    final partPrograms = <String, int>{};
+    final partList = _firstChild(document.rootElement, 'part-list');
+    if (partList != null) {
+      for (final scorePart in _children(partList, 'score-part')) {
+        final id = scorePart.getAttribute('id');
+        if (id == null) continue;
+        final name = _text(scorePart, 'part-name') ??
+            _text(scorePart, 'part-abbreviation');
+        if (name != null) partNames[id] = name;
+        final midiProgram = int.tryParse(
+          _text(_firstChild(scorePart, 'midi-instrument') ?? scorePart,
+                  'midi-program') ??
+              '',
+        );
+        if (midiProgram != null) {
+          partPrograms[id] = (midiProgram - 1).clamp(0, 127).toInt();
+        }
+      }
+    }
+
+    XmlElement? selectedPart;
+    if (selectedPartId == null) {
+      selectedPart =
+          parts.firstWhere(_hasMultipleStaves, orElse: () => parts.first);
+    } else {
+      for (final candidate in parts) {
+        if ((candidate.getAttribute('id') ??
+                'part-${parts.indexOf(candidate) + 1}') ==
+            selectedPartId) {
+          selectedPart = candidate;
+          break;
+        }
+      }
+    }
+    if (selectedPart == null) {
+      throw FormatException('La partie "$selectedPartId" est introuvable.');
+    }
+    final part = selectedPart;
+    final partInfos = <ScorePartInfo>[];
+    for (var index = 0; index < parts.length; index++) {
+      final id = parts[index].getAttribute('id') ?? 'part-${index + 1}';
+      partInfos.add(ScorePartInfo(
+        id: id,
+        name: partNames[id] ?? 'Partie ${index + 1}',
+        staves: _staffCount(parts[index]),
+        instrumentProgram: partPrograms[id],
+      ));
+    }
+    final tempoChanges = _parseTempoChanges(parts, ticksPerBeat);
 
     var divisions = 1.0;
     var fifths = 0;
@@ -224,7 +330,10 @@ class MusicXmlScore {
             previousNoteStart = cursor;
             cursor += duration;
           }
-          furthestCursor = math.max(furthestCursor, cursor);
+          furthestCursor = math.max(
+            furthestCursor,
+            math.max(cursor, noteStart + duration),
+          );
         }
       }
 
@@ -263,8 +372,122 @@ class MusicXmlScore {
     return MusicXmlScore(
       measures: List.unmodifiable(measures),
       ticksPerBeat: ticksPerBeat,
+      parts: List.unmodifiable(partInfos),
+      selectedPartId: part.getAttribute('id') ?? 'part-1',
+      tempoChanges: List.unmodifiable(tempoChanges),
+      title: title,
+      creators: List.unmodifiable(creators),
     );
   }
+}
+
+List<ScoreTempoChange> _parseTempoChanges(
+  List<XmlElement> parts,
+  int ticksPerBeat,
+) {
+  final changes = <(int, double), ScoreTempoChange>{};
+  for (final part in parts) {
+    var divisions = 1.0;
+    var beats = 4;
+    var beatType = 4;
+    var elapsedQuarterNotes = 0.0;
+
+    for (final measure in _children(part, 'measure')) {
+      var cursor = 0.0;
+      var furthestCursor = 0.0;
+      var previousNoteStart = 0.0;
+      for (final element in measure.children.whereType<XmlElement>()) {
+        switch (element.name.local) {
+          case 'attributes':
+            final divisionsText = _text(element, 'divisions');
+            if (divisionsText != null) {
+              final parsedDivisions = double.tryParse(divisionsText);
+              if (parsedDivisions == null || parsedDivisions <= 0) {
+                throw const FormatException(
+                  'Le MusicXML contient une division temporelle invalide.',
+                );
+              }
+              divisions = parsedDivisions;
+            }
+            final time = _firstChild(element, 'time');
+            final beatsText = time == null ? null : _text(time, 'beats');
+            final beatTypeText = time == null ? null : _text(time, 'beat-type');
+            if (beatsText != null) {
+              beats = beatsText
+                  .split('+')
+                  .map((value) => int.tryParse(value) ?? 0)
+                  .fold(0, (total, value) => total + value);
+            }
+            if (beatTypeText != null) {
+              beatType = int.tryParse(beatTypeText) ?? 0;
+            }
+          case 'backup':
+          case 'forward':
+            final duration =
+                double.tryParse(_text(element, 'duration') ?? '') ?? 0;
+            cursor += element.name.local == 'backup' ? -duration : duration;
+            furthestCursor = math.max(furthestCursor, cursor);
+          case 'note':
+            final duration =
+                double.tryParse(_text(element, 'duration') ?? '') ?? 0;
+            final isChord = _firstChild(element, 'chord') != null;
+            if (!isChord) {
+              previousNoteStart = cursor;
+              cursor += duration;
+            }
+            furthestCursor = math.max(
+              furthestCursor,
+              math.max(cursor, previousNoteStart + duration),
+            );
+          case 'direction':
+            final bpm = _tempoFromDirection(element);
+            if (bpm != null) {
+              final offset =
+                  double.tryParse(_text(element, 'offset') ?? '0') ?? 0;
+              final tick =
+                  ((elapsedQuarterNotes + (cursor + offset) / divisions) *
+                          ticksPerBeat)
+                      .round();
+              changes[(tick, bpm)] = ScoreTempoChange(tick: tick, bpm: bpm);
+            }
+        }
+      }
+
+      final expectedQuarterNotes =
+          beats > 0 && beatType > 0 ? beats * 4 / beatType : 0.0;
+      elapsedQuarterNotes += math.max(
+        expectedQuarterNotes,
+        furthestCursor / divisions,
+      );
+    }
+  }
+  return changes.values.toList()
+    ..sort((a, b) {
+      final tickOrder = a.tick.compareTo(b.tick);
+      return tickOrder != 0 ? tickOrder : a.bpm.compareTo(b.bpm);
+    });
+}
+
+int _staffCount(XmlElement part) {
+  var staves = 1;
+  for (final measure in _children(part, 'measure')) {
+    for (final attributes in _children(measure, 'attributes')) {
+      staves = math.max(
+        staves,
+        int.tryParse(_text(attributes, 'staves') ?? '') ?? 1,
+      );
+      for (final clef in _children(attributes, 'clef')) {
+        staves = math.max(
+          staves,
+          int.tryParse(clef.getAttribute('number') ?? '') ?? 1,
+        );
+      }
+    }
+    for (final note in _children(measure, 'note')) {
+      staves = math.max(staves, int.tryParse(_text(note, 'staff') ?? '') ?? 1);
+    }
+  }
+  return staves;
 }
 
 bool _hasMultipleStaves(XmlElement part) {
@@ -281,6 +504,35 @@ bool _hasMultipleStaves(XmlElement part) {
     }
   }
   return false;
+}
+
+double? _tempoFromDirection(XmlElement direction) {
+  final sound = _firstChild(direction, 'sound');
+  final soundTempo = double.tryParse(sound?.getAttribute('tempo') ?? '');
+  if (soundTempo != null && soundTempo >= 20 && soundTempo <= 400) {
+    return soundTempo;
+  }
+
+  for (final metronome in direction.descendants.whereType<XmlElement>()) {
+    if (metronome.name.local != 'metronome') continue;
+    final bpm = double.tryParse(_text(metronome, 'per-minute') ?? '');
+    if (bpm == null) continue;
+    final quarterNotesPerUnit = switch (_text(metronome, 'beat-unit')) {
+      'whole' => 4.0,
+      'half' => 2.0,
+      'quarter' => 1.0,
+      'eighth' => 0.5,
+      '16th' => 0.25,
+      '32nd' => 0.125,
+      '64th' => 0.0625,
+      _ => null,
+    };
+    if (quarterNotesPerUnit == null) continue;
+    final dots = _children(metronome, 'beat-unit-dot').length;
+    final converted = bpm * quarterNotesPerUnit * (2 - math.pow(0.5, dots));
+    if (converted >= 20 && converted <= 400) return converted.toDouble();
+  }
+  return null;
 }
 
 ScoreClef _parseClef(XmlElement clef) {

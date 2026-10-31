@@ -134,9 +134,11 @@ class _MeasureJumpControlState extends State<_MeasureJumpControl> {
 class _PlayerScreenState extends State<PlayerScreen> {
   bool _isLoading = true;
   Uint8List? _midiBytes;
+  String? _musicXmlSource;
   MidiVisualization? _visualization;
   MusicXmlScore? _score;
   MidiPlayerConfiguration? _configuration;
+  int? _selectedPartTrackIndex;
   String? _errorMessage;
   String? _playbackError;
   bool _isPreparingPlayback = false;
@@ -163,9 +165,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _isLoading = true;
       _errorMessage = null;
       _midiBytes = null;
+      _musicXmlSource = null;
       _visualization = null;
       _score = null;
       _configuration = null;
+      _selectedPartTrackIndex = null;
       _playbackPosition.value = 0;
     });
 
@@ -201,18 +205,34 @@ class _PlayerScreenState extends State<PlayerScreen> {
             'Le serveur n’a pas renvoyé un fichier MIDI valide.');
       }
       final visualization = MidiVisualization.parse(bytes);
-      final configuration = MidiConfiguration.defaultsFor(bytes);
+      final configuration = await MidiConfiguration.loadPreferences(
+        MidiConfiguration.defaultsFor(bytes),
+      );
+      final musicXmlSource = utf8.decode(musicXmlResponse.bodyBytes);
       final score = MusicXmlScore.parse(
-        utf8.decode(musicXmlResponse.bodyBytes),
+        musicXmlSource,
         ticksPerBeat: visualization.ticksPerBeat,
       );
+      final selectedPartTrackIndex = score.parts.length ==
+              visualization.trackCount
+          ? score.parts.indexWhere((part) => part.id == score.selectedPartId)
+          : null;
+      final scoreVisualization = selectedPartTrackIndex != null &&
+              selectedPartTrackIndex >= 0
+          ? MidiVisualization.parse(bytes, trackIndex: selectedPartTrackIndex)
+          : visualization;
 
       if (mounted) {
         setState(() {
           _midiBytes = bytes;
-          _visualization = visualization;
+          _musicXmlSource = musicXmlSource;
+          _visualization = scoreVisualization;
           _score = score;
           _configuration = configuration;
+          _selectedPartTrackIndex =
+              selectedPartTrackIndex != null && selectedPartTrackIndex >= 0
+                  ? selectedPartTrackIndex
+                  : null;
           _isLoading = false;
         });
       }
@@ -269,6 +289,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           initialConfiguration: configuration,
           onTestAudio: _testPlaybackAudio,
           onSave: (updatedConfiguration) async {
+            await MidiConfiguration.savePreferences(updatedConfiguration);
             if (!mounted) return;
             setState(() {
               _configuration = updatedConfiguration;
@@ -286,13 +307,149 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _testPlaybackAudio(
     MidiPlayerConfiguration configuration,
   ) async {
-    final configuredBytes = MidiConfiguration.apply(_midiBytes!, configuration);
+    final configuredBytes = MidiConfiguration.apply(
+      _midiBytes!,
+      configuration,
+      selectedTrackIndex: _selectedPartTrackIndex,
+    );
     await _playback.prepare(configuredBytes);
     _hasPreparedPlayback = true;
     await _playback.testNote(
       instrumentProgram: configuration.instrumentProgram,
       volumePercent: configuration.volumePercent,
     );
+  }
+
+  Future<void> _showTempoMap(MusicXmlScore score) async {
+    if (score.tempoChanges.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+              child: Text(
+                'Tempos de la partition',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            for (final tempo in score.tempoChanges)
+              ListTile(
+                key: Key('tempo_change_${tempo.tick}'),
+                leading: const Icon(Icons.speed_rounded),
+                title: Text('${tempo.bpm.round()} BPM'),
+                subtitle: Text(
+                  'Mesure ${_measureIndexAtTick(score, tempo.tick) + 1}',
+                ),
+                trailing: const Icon(Icons.arrow_forward_rounded),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _seekToMeasure(_measureIndexAtTick(score, tempo.tick));
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showScoreDetails(MusicXmlScore score) async {
+    final selectedPart =
+        score.parts.firstWhere((part) => part.id == score.selectedPartId);
+    final openingMeasure = score.measures.first;
+    final selectedInstrument = selectedPart.instrumentProgram == null
+        ? null
+        : GeneralMidiInstrument.byProgram(selectedPart.instrumentProgram!);
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+              child: Text(
+                'Informations de la partition',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.music_note_rounded),
+              title: Text(score.title ?? widget.title),
+              subtitle: Text(
+                score.title == null
+                    ? 'Aucun titre détecté dans le document'
+                    : 'Titre lu dans le document',
+              ),
+            ),
+            for (final creator in score.creators)
+              ListTile(
+                leading: const Icon(Icons.person_outline_rounded),
+                title: Text(creator.name),
+                subtitle: Text(creator.role),
+              ),
+            ListTile(
+              leading: const Icon(Icons.tune_rounded),
+              title: Text(
+                '${_keySignatureLabel(openingMeasure.fifths)}'
+                '  ·  ${openingMeasure.beats}/${openingMeasure.beatType}',
+              ),
+              subtitle: const Text('Tonalité et métrique au début'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.library_music_rounded),
+              title: Text(selectedPart.name),
+              subtitle: Text(
+                '${selectedPart.staves} portée${selectedPart.staves > 1 ? 's' : ''}'
+                '${selectedInstrument == null ? '' : '  ·  ${selectedInstrument.name}'}',
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.straighten_rounded),
+              title: Text('${score.measures.length} mesures'),
+              subtitle: Text(
+                '${score.parts.length} partie${score.parts.length > 1 ? 's' : ''}'
+                '  ·  ${score.tempoChanges.length} indication${score.tempoChanges.length > 1 ? 's' : ''} de tempo',
+              ),
+            ),
+            if (score.parts.length > 1 && _selectedPartTrackIndex == null)
+              const Tooltip(
+                message:
+                    'Les pistes MIDI ne correspondent pas aux parties de la partition.',
+                child: Icon(Icons.info_outline_rounded, size: 20),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _keySignatureLabel(int fifths) {
+    if (fifths == 0) return 'Aucune altération';
+    final accidental = fifths > 0 ? 'dièse' : 'bémol';
+    final count = fifths.abs();
+    return '$count $accidental${count > 1 ? 's' : ''}';
+  }
+
+  int _measureIndexAtTick(MusicXmlScore score, int tick) {
+    final index =
+        score.measures.indexWhere((measure) => tick < measure.endTick);
+    return index < 0 ? score.measures.length - 1 : index;
+  }
+
+  double? _tempoAtTick(MusicXmlScore score, int tick) {
+    ScoreTempoChange? activeTempo;
+    for (final tempo in score.tempoChanges) {
+      if (tempo.tick > tick) break;
+      activeTempo = tempo;
+    }
+    return activeTempo?.bpm;
   }
 
   Future<void> _runPlaybackAction() async {
@@ -304,8 +461,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     try {
       if (!_hasPreparedPlayback) {
-        final configuredBytes =
-            MidiConfiguration.apply(_midiBytes!, _configuration!);
+        final configuredBytes = MidiConfiguration.apply(
+          _midiBytes!,
+          _configuration!,
+          selectedTrackIndex: _selectedPartTrackIndex,
+        );
         await _playback.prepare(configuredBytes);
         _hasPreparedPlayback = true;
       }
@@ -580,38 +740,106 @@ class _PlayerScreenState extends State<PlayerScreen> {
           child: Card(
             margin: EdgeInsets.zero,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Row(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(
-                    backgroundColor:
-                        theme.colorScheme.primary.withValues(alpha: 0.16),
-                    child: Icon(Icons.music_note,
-                        color: theme.colorScheme.primary),
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor:
+                            theme.colorScheme.primary.withValues(alpha: 0.16),
+                        child: Icon(Icons.music_note_rounded,
+                            color: theme.colorScheme.primary),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              score.title ?? widget.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${instrument.name}  ·  ${configuration.tempoBpm} BPM  ·  ${visualization.notes.length} notes${score.tempoChanges.isEmpty ? '' : '  ·  partition : ${score.tempoChanges.first.bpm.round()} BPM'}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: Colors.white60),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        key: const Key('score_details_button'),
+                        onPressed: () => _showScoreDetails(score),
+                        tooltip: 'Informations détectées',
+                        icon: const Icon(Icons.info_outline_rounded),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  if (score.parts.length > 1) ...[
+                    const SizedBox(height: 12),
+                    Divider(
+                      height: 1,
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
                       children: [
-                        Text(
-                          widget.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.bold),
+                        Icon(
+                          Icons.queue_music_rounded,
+                          size: 18,
+                          color: theme.colorScheme.secondary,
                         ),
-                        const SizedBox(height: 3),
+                        const SizedBox(width: 8),
                         Text(
-                          '${instrument.name}  ·  ${configuration.tempoBpm} BPM  ·  ${visualization.notes.length} notes',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: Colors.white60),
+                          'PARTIE',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            letterSpacing: 0.8,
+                            color: Colors.white60,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              key: const Key('score_part_selector'),
+                              value: score.selectedPartId,
+                              isExpanded: true,
+                              onChanged: _isPlaying ||
+                                      _isPreparingPlayback ||
+                                      _selectedPartTrackIndex == null
+                                  ? null
+                                  : _selectScorePart,
+                              items: [
+                                for (final part in score.parts)
+                                  DropdownMenuItem(
+                                    value: part.id,
+                                    child: Text(
+                                      '${part.name}${part.staves > 1 ? ' · ${part.staves} portées' : ''}',
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (_selectedPartTrackIndex == null)
+                          const Tooltip(
+                            message:
+                                'Les pistes MIDI ne correspondent pas aux parties de la partition.',
+                            child: Icon(Icons.info_outline_rounded, size: 20),
+                          ),
                       ],
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -676,6 +904,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             final measureIndex =
                 activeMeasure < 0 ? score.measures.length - 1 : activeMeasure;
             final measureNumber = measureIndex + 1;
+            final activeTempo = _tempoAtTick(score, currentTick);
             return Padding(
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
               child: Column(
@@ -699,6 +928,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             !_isPreparingPlayback && score.measures.isNotEmpty,
                         onJump: (measure) => _seekToMeasure(measure - 1),
                       ),
+                      if (score.tempoChanges.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        TextButton.icon(
+                          key: const Key('tempo_map_button'),
+                          onPressed: () => _showTempoMap(score),
+                          icon: const Icon(Icons.speed_rounded, size: 16),
+                          label: Text(activeTempo == null
+                              ? 'Tempo'
+                              : '${activeTempo.round()} BPM'),
+                        ),
+                      ],
                       const Spacer(),
                       Text(
                         '${(progress * 100).round()} %',
@@ -784,6 +1024,41 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
       ],
     );
+  }
+
+  void _selectScorePart(String? partId) {
+    final source = _musicXmlSource;
+    final score = _score;
+    final visualization = _visualization;
+    if (partId == null ||
+        source == null ||
+        score == null ||
+        visualization == null ||
+        partId == score.selectedPartId) {
+      return;
+    }
+
+    if (score.parts.length != _visualization!.trackCount) return;
+    final partTrackIndex = score.parts.indexWhere((part) => part.id == partId);
+    if (partTrackIndex < 0) return;
+
+    final updatedScore = MusicXmlScore.parse(
+      source,
+      ticksPerBeat: visualization.ticksPerBeat,
+      selectedPartId: partId,
+    );
+    final updatedVisualization = MidiVisualization.parse(
+      _midiBytes!,
+      trackIndex: partTrackIndex,
+    );
+    setState(() {
+      _score = updatedScore;
+      _visualization = updatedVisualization;
+      _selectedPartTrackIndex = partTrackIndex;
+      _hasPreparedPlayback = false;
+      _playbackComplete = false;
+      _playbackPosition.value = 0;
+    });
   }
 
   (int, int) _pitchRange(List<MidiNote> notes) {

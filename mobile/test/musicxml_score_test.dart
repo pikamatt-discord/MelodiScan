@@ -150,4 +150,66 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('exposes all parts, selects grand staff automatically and reads tempos',
+      () {
+    const musicXml = '''
+      <score-partwise>
+        <part-list>
+          <score-part id="P1"><part-name>Flute</part-name></score-part>
+          <score-part id="P2"><part-name>Piano</part-name></score-part>
+        </part-list>
+        <part id="P1">
+          <measure number="1">
+            <attributes><divisions>24</divisions></attributes>
+            <direction><direction-type><metronome>
+              <beat-unit>eighth</beat-unit><per-minute>120</per-minute>
+            </metronome></direction-type></direction>
+            <note><pitch><step>A</step><octave>4</octave></pitch>
+              <duration>96</duration><type>whole</type></note>
+          </measure>
+          <measure number="2">
+            <direction><sound tempo="90"/></direction>
+            <note><pitch><step>B</step><octave>4</octave></pitch>
+              <duration>96</duration><type>whole</type></note>
+          </measure>
+        </part>
+        <part id="P2">
+          <measure number="1">
+            <attributes>
+              <divisions>24</divisions><staves>2</staves>
+              <time><beats>4</beats><beat-type>4</beat-type></time>
+              <clef number="1"><sign>G</sign><line>2</line></clef>
+              <clef number="2"><sign>F</sign><line>4</line></clef>
+            </attributes>
+            <note><pitch><step>C</step><octave>4</octave></pitch>
+              <duration>96</duration><type>whole</type><staff>1</staff></note>
+          </measure>
+          <measure number="2">
+            <note><pitch><step>D</step><octave>4</octave></pitch>
+              <duration>96</duration><type>whole</type><staff>1</staff></note>
+          </measure>
+        </part>
+      </score-partwise>
+    ''';
+
+    final score = MusicXmlScore.parse(musicXml, ticksPerBeat: 96);
+
+    expect(score.parts.map((part) => part.name), ['Flute', 'Piano']);
+    expect(score.parts.last.staves, 2);
+    expect(score.selectedPartId, 'P2');
+    expect(score.hasGrandStaff, isTrue);
+    expect(score.tempoChanges.map((tempo) => tempo.bpm), [60, 90]);
+    expect(score.tempoChanges.map((tempo) => tempo.tick), [0, 384]);
+
+    final flute = MusicXmlScore.parse(
+      musicXml,
+      ticksPerBeat: 96,
+      selectedPartId: 'P1',
+    );
+    expect(flute.selectedPartId, 'P1');
+    expect(flute.hasGrandStaff, isFalse);
+    expect(flute.measures, hasLength(2));
+    expect(flute.tempoChanges.map((tempo) => tempo.bpm), [60, 90]);
+  });
 }

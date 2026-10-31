@@ -13,9 +13,9 @@ class MelodiScanApp extends StatelessWidget {
   Widget build(BuildContext context) {
     const primaryAccent = Color(0xFF9D4EDD);
     const secondaryAccent = Color(0xFF06D6A0);
-    const darkBackground = Color(0xFF0D0F12);
-    const surfaceColor = Color(0xFF161A20);
-    const surfaceElevated = Color(0xFF202630);
+    const darkBackground = Color(0xFF0D1016);
+    const surfaceColor = Color(0xFF171B24);
+    const surfaceElevated = Color(0xFF202634);
 
     return MaterialApp(
       title: 'MelodiScan Enterprise',
@@ -28,23 +28,22 @@ class MelodiScanApp extends StatelessWidget {
           primary: primaryAccent,
           secondary: secondaryAccent,
           surface: surfaceColor,
-          background: darkBackground,
           onPrimary: Colors.white,
           onSecondary: Colors.black,
         ),
         cardTheme: CardThemeData(
           color: surfaceColor,
-          elevation: 4,
-          shadowColor: Colors.black.withAlpha(120),
+          elevation: 1,
+          shadowColor: Colors.black.withAlpha(70),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: Colors.white.withAlpha(15), width: 1),
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white.withAlpha(12), width: 1),
           ),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF12151B),
           elevation: 0,
-          centerTitle: true,
+          centerTitle: false,
           titleTextStyle: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -55,7 +54,8 @@ class MelodiScanApp extends StatelessWidget {
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: surfaceElevated,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: Colors.white.withAlpha(20)),
@@ -77,6 +77,13 @@ class MelodiScanApp extends StatelessWidget {
           thumbColor: primaryAccent,
           overlayColor: primaryAccent.withAlpha(40),
           trackHeight: 6,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+          ),
         ),
       ),
       home: const ScanScreen(),

@@ -562,10 +562,24 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
     })
     full_audiveris_output = "INFO processing\n" + ("complete detail\n" * 1000)
 
+    musicxml_path = tmp_path / "score.musicxml"
+    musicxml_path.write_text(
+        """<score-partwise>
+          <work><work-title>Title from score</work-title></work>
+          <part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list>
+          <part id="P1"><measure number="1">
+            <attributes><divisions>1</divisions></attributes>
+            <note><pitch><step>C</step><octave>4</octave></pitch>
+              <duration>1</duration><type>quarter</type></note>
+          </measure></part>
+        </score-partwise>""",
+        encoding="utf-8",
+    )
+
     def process_score(_engine, _score_path, _output_dir, received_log_path):
         with open(received_log_path, "a", encoding="utf-8") as log_file:
             log_file.write(full_audiveris_output)
-        return "score.musicxml"
+        return str(musicxml_path)
 
     monkeypatch.setattr("app.tasks.OMREngine.process_score", process_score)
     monkeypatch.setattr(
@@ -578,6 +592,8 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
     )
 
     assert task["status"] == "STATUS_COMPLETED"
+    assert task["title"] == "Title from score"
+    assert task["score_metadata"]["parts"][0]["name"] == "Flute"
     assert not input_path.exists()
     logs_response = client.get("/api/v1/tasks/successful-log-task/logs")
     logs = logs_response.json()["logs"]

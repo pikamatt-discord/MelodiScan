@@ -41,6 +41,57 @@ void main() {
     expect(find.text('Ouvrir le lecteur MIDI'), findsOneWidget);
   });
 
+  testWidgets('StatusScreen displays score metadata from the document',
+      (tester) async {
+    final event = jsonEncode({
+      'task_id': 'task-metadata',
+      'status': 'STATUS_COMPLETED',
+      'progress': 1.0,
+      'title': 'Titre détecté',
+      'score_metadata': {
+        'measure_count': 32,
+        'creators': [
+          {'role': 'composer', 'name': 'Alice Martin'}
+        ],
+        'parts': [
+          {
+            'name': 'Piano',
+            'key_fifths': -2,
+            'meter': {'beats': '4', 'beat_type': '4'}
+          }
+        ],
+        'tempo_changes': [
+          {'bpm': 96}
+        ],
+      },
+    });
+    final client = MockClient((_) async => http.Response.bytes(
+          utf8.encode('data: $event\n\n'),
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        ));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatusScreen(
+          taskId: 'task-metadata',
+          title: 'Analyse de la partition',
+          serverUrl: 'http://localhost:8080',
+          httpClient: client,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Traitement : Titre détecté'), findsOneWidget);
+    expect(find.textContaining('32 mesures'), findsOneWidget);
+    expect(find.textContaining('Compositeur : Alice Martin'), findsOneWidget);
+    expect(find.textContaining('Piano'), findsOneWidget);
+    expect(find.textContaining('2 bémols'), findsOneWidget);
+    expect(find.textContaining('4/4'), findsOneWidget);
+    expect(find.textContaining('96 BPM détectés'), findsOneWidget);
+  });
+
   testWidgets(
       'StatusScreen displays concise processing errors without simulating completion',
       (tester) async {

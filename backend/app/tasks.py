@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from celery import Celery
 from app.omr_engine import OMREngine, convert_musicxml_to_midi
+from app.score_metadata import analyze_musicxml_file
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -73,6 +74,14 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
         ).process_score(score_path, output_dir, log_path)
 
         _append_task_log(log_path, f"MusicXML généré : {musicxml_path}")
+        score_metadata = analyze_musicxml_file(musicxml_path)
+        document_title = score_metadata.get("title")
+        requested_title = (state.get("user_title") or title or "").strip()
+        state.update({
+            "score_metadata": score_metadata,
+            "title": document_title or requested_title or "Partition sans titre",
+        })
+        set_task_state(task_id, state)
         state["status"] = "STATUS_BUILDING_MUSICXML"
         set_task_state(task_id, state)
 
