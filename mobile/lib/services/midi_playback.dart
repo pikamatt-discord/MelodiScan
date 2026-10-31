@@ -9,6 +9,10 @@ abstract interface class MidiPlayback {
   bool get isSupported;
 
   Future<void> prepare(Uint8List midiBytes);
+  Future<void> testNote({
+    required int instrumentProgram,
+    required int volumePercent,
+  });
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
@@ -45,7 +49,7 @@ class FlutterMidiPlayback implements MidiPlayback {
     }
 
     if (!_midi.isInitialized) {
-      await _midi.init();
+      await _midi.init(sampleRate: 48000, bufferSize: 256, polyphony: 128);
     }
 
     try {
@@ -59,6 +63,36 @@ class FlutterMidiPlayback implements MidiPlayback {
         await _midi.dispose();
       }
       rethrow;
+    }
+  }
+
+  @override
+  Future<void> testNote({
+    required int instrumentProgram,
+    required int volumePercent,
+  }) async {
+    final soundfontId = _soundfontId;
+    if (!_midi.isInitialized || soundfontId == null) {
+      throw StateError('Le moteur MIDI n’est pas préparé.');
+    }
+
+    await _midi.selectInstrument(
+      sfId: soundfontId,
+      channel: 0,
+      bank: 0,
+      program: instrumentProgram,
+    );
+    await _midi.controlChange(
+      sfId: soundfontId,
+      channel: 0,
+      controller: 7,
+      value: volumePercent.clamp(0, 100),
+    );
+    await _midi.playNote(channel: 0, key: 60, velocity: 110, sfId: soundfontId);
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+    } finally {
+      await _midi.stopNote(channel: 0, key: 60, sfId: soundfontId);
     }
   }
 

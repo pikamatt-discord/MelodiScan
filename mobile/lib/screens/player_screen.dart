@@ -171,6 +171,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       MaterialPageRoute<void>(
         builder: (_) => PlayerConfigurationScreen(
           initialConfiguration: configuration,
+          onTestAudio: _testPlaybackAudio,
           onSave: (updatedConfiguration) async {
             if (!mounted) return;
             setState(() {
@@ -183,6 +184,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
           },
         ),
       ),
+    );
+  }
+
+  Future<void> _testPlaybackAudio(
+    MidiPlayerConfiguration configuration,
+  ) async {
+    final configuredBytes = MidiConfiguration.apply(_midiBytes!, configuration);
+    await _playback.prepare(configuredBytes);
+    _hasPreparedPlayback = true;
+    await _playback.testNote(
+      instrumentProgram: configuration.instrumentProgram,
+      volumePercent: configuration.volumePercent,
     );
   }
 
@@ -471,7 +484,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   ? _PianoRoll(
                       notes: visualization.notes,
                       ticksPerBeat: visualization.ticksPerBeat,
+                      tempoBpm: configuration.tempoBpm,
+                      totalTicks: visualization.totalTicks,
                       currentTick: _playbackPosition,
+                      isPlaying: _isPlaying,
                       lowPitch: pitchRange.$1,
                       highPitch: pitchRange.$2,
                     )
@@ -631,14 +647,20 @@ class _PianoRoll extends StatefulWidget {
   const _PianoRoll({
     required this.notes,
     required this.ticksPerBeat,
+    required this.tempoBpm,
+    required this.totalTicks,
     required this.currentTick,
+    required this.isPlaying,
     required this.lowPitch,
     required this.highPitch,
   });
 
   final List<MidiNote> notes;
   final int ticksPerBeat;
+  final int tempoBpm;
+  final int totalTicks;
   final ValueListenable<int> currentTick;
+  final bool isPlaying;
   final int lowPitch;
   final int highPitch;
 
@@ -650,22 +672,31 @@ class _PianoRollState extends State<_PianoRoll>
     with SingleTickerProviderStateMixin {
   late final _PianoRollTimeline _timeline =
       _PianoRollTimeline(widget.notes, widget.ticksPerBeat);
-  late final AnimationController _cursorController;
+  late final AnimationController _frameController;
   late final ValueNotifier<double> _smoothTick;
-  late Animation<double> _cursorAnimation;
-  late DateTime _lastPositionUpdate;
+  late final Stopwatch _clock;
+  late double _anchorTick;
+  late Duration _anchorTime;
+  late Duration _lastNativeTime;
+  late int _lastNativeTick;
+  late double _ticksPerSecond;
 
   @override
   void initState() {
     super.initState();
     final tick = widget.currentTick.value.toDouble();
-    _cursorController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 80),
-    )..addListener(_updateSmoothedTick);
+    _clock = Stopwatch()..start();
+    _anchorTick = tick;
+    _anchorTime = _clock.elapsed;
+    _lastNativeTime = _anchorTime;
+    _lastNativeTick = tick.round();
+    _ticksPerSecond = widget.ticksPerBeat * widget.tempoBpm / 60;
     _smoothTick = ValueNotifier<double>(tick);
-    _cursorAnimation = AlwaysStoppedAnimation<double>(tick);
-    _lastPositionUpdate = DateTime.now();
+    _frameController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )..addListener(_updateSmoothedTick);
+    if (widget.isPlaying) _frameController.repeat();
     widget.currentTick.addListener(_handlePositionChanged);
   }
 
@@ -675,37 +706,79 @@ class _PianoRollState extends State<_PianoRoll>
     if (oldWidget.currentTick != widget.currentTick) {
       oldWidget.currentTick.removeListener(_handlePositionChanged);
       widget.currentTick.addListener(_handlePositionChanged);
-      _cursorController.stop();
-      _smoothTick.value = widget.currentTick.value.toDouble();
-      _lastPositionUpdate = DateTime.now();
+      _resetClock(widget.currentTick.value.toDouble());
+    }
+    if (oldWidget.tempoBpm != widget.tempoBpm) {
+      _ticksPerSecond = widget.ticksPerBeat * widget.tempoBpm / 60;
+    }
+    if (oldWidget.isPlaying != widget.isPlaying) {
+      if (widget.isPlaying) {
+        _resetClock(_smoothTick.value);
+        _frameController.repeat();
+      } else {
+        _frameController.stop();
+        _resetClock(widget.currentTick.value.toDouble());
+      }
     }
   }
 
+  void _resetClock(double tick) {
+    _anchorTick = tick;
+    _anchorTime = _clock.elapsed;
+    _lastNativeTick = widget.currentTick.value;
+    _lastNativeTime = _anchorTime;
+    _smoothTick.value = tick;
+  }
+
   void _updateSmoothedTick() {
-    _smoothTick.value = _cursorAnimation.value;
+    final elapsed = _clock.elapsed - _anchorTime;
+    final tick = (_anchorTick +
+            elapsed.inMicroseconds / Duration.microsecondsPerSecond *
+                _ticksPerSecond)
+        .clamp(0.0, widget.totalTicks.toDouble())
+        .toDouble();
+    if ((tick - _smoothTick.value).abs() >= 0.001) {
+      _smoothTick.value = tick;
+    }
   }
 
   void _handlePositionChanged() {
-    final now = DateTime.now();
-    final elapsed = now.difference(_lastPositionUpdate);
-    _lastPositionUpdate = now;
-    _cursorController
-      ..stop()
-      ..duration = Duration(
-        milliseconds: elapsed.inMilliseconds.clamp(24, 120).toInt(),
-      );
-    _cursorAnimation = Tween<double>(
-      begin: _smoothTick.value,
-      end: widget.currentTick.value.toDouble(),
-    ).animate(_cursorController);
-    _cursorController.forward(from: 0);
+    final nativeTick = widget.currentTick.value;
+    final now = _clock.elapsed;
+    final elapsed = now - _lastNativeTime;
+    final tickDelta = nativeTick - _lastNativeTick;
+
+    if (!widget.isPlaying || tickDelta < 0 || elapsed.inMilliseconds > 1000) {
+      _resetClock(nativeTick.toDouble());
+    } else {
+      if (tickDelta > 0 && elapsed.inMicroseconds > 0) {
+        final observedRate =
+            tickDelta * Duration.microsecondsPerSecond / elapsed.inMicroseconds;
+        _ticksPerSecond = _ticksPerSecond * 0.35 + observedRate * 0.65;
+      }
+
+      final elapsedSinceAnchor = now - _anchorTime;
+      final predictedTick = _anchorTick +
+          elapsedSinceAnchor.inMicroseconds /
+              Duration.microsecondsPerSecond *
+              _ticksPerSecond;
+      final correction = nativeTick - predictedTick;
+      if (correction.abs() > _ticksPerSecond * 0.5) {
+        _anchorTick = nativeTick.toDouble();
+      } else {
+        _anchorTick = predictedTick + correction * 0.65;
+      }
+      _anchorTime = now;
+      _lastNativeTick = nativeTick;
+      _lastNativeTime = now;
+    }
   }
 
   @override
   void dispose() {
     widget.currentTick.removeListener(_handlePositionChanged);
-    _cursorController.removeListener(_updateSmoothedTick);
-    _cursorController.dispose();
+    _frameController.removeListener(_updateSmoothedTick);
+    _frameController.dispose();
     _smoothTick.dispose();
     super.dispose();
   }
@@ -746,7 +819,7 @@ class _PianoRollState extends State<_PianoRoll>
             height: 72,
             child: _PianoKeyboard(
               timeline: _timeline,
-              currentTick: widget.currentTick,
+              currentTick: _smoothTick,
               lowPitch: widget.lowPitch,
               highPitch: widget.highPitch,
             ),
@@ -956,7 +1029,7 @@ class _PianoKeyboard extends StatelessWidget {
   });
 
   final _PianoRollTimeline timeline;
-  final ValueListenable<int> currentTick;
+  final ValueListenable<double> currentTick;
   final int lowPitch;
   final int highPitch;
 
@@ -983,7 +1056,7 @@ class _PianoKeyboardPainter extends CustomPainter {
   }) : super(repaint: currentTick);
 
   final _PianoRollTimeline timeline;
-  final ValueListenable<int> currentTick;
+  final ValueListenable<double> currentTick;
   final int lowPitch;
   final int highPitch;
 
@@ -997,7 +1070,7 @@ class _PianoKeyboardPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final activePitches = timeline.activePitches(currentTick.value);
+    final activePitches = timeline.activePitches(currentTick.value.floor());
     final whitePitches = _whitePitches;
     if (whitePitches.isEmpty) return;
 

@@ -6,11 +6,14 @@ class PlayerConfigurationScreen extends StatefulWidget {
   const PlayerConfigurationScreen({
     required this.initialConfiguration,
     required this.onSave,
+    required this.onTestAudio,
     super.key,
   });
 
   final MidiPlayerConfiguration initialConfiguration;
   final Future<void> Function(MidiPlayerConfiguration configuration) onSave;
+  final Future<void> Function(MidiPlayerConfiguration configuration)
+      onTestAudio;
 
   @override
   State<PlayerConfigurationScreen> createState() =>
@@ -22,6 +25,8 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
   late double _tempo = widget.initialConfiguration.tempoBpm.toDouble();
   late double _volume = widget.initialConfiguration.volumePercent.toDouble();
   bool _isSaving = false;
+  bool _isTestingAudio = false;
+  String? _testAudioError;
 
   Future<void> _save() async {
     setState(() => _isSaving = true);
@@ -31,6 +36,26 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
       volumePercent: _volume.round(),
     ));
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _testAudio() async {
+    setState(() {
+      _isTestingAudio = true;
+      _testAudioError = null;
+    });
+    try {
+      await widget.onTestAudio(MidiPlayerConfiguration(
+        instrumentProgram: _instrumentProgram,
+        tempoBpm: _tempo.round(),
+        volumePercent: _volume.round(),
+      ));
+    } catch (error) {
+      if (mounted) {
+        setState(() => _testAudioError = error.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _isTestingAudio = false);
+    }
   }
 
   @override
@@ -160,6 +185,31 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
               onChanged:
                   _isSaving ? null : (value) => setState(() => _volume = value),
             ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('test_audio_button'),
+              onPressed:
+                  _isTestingAudio || _isSaving ? null : _testAudio,
+              icon: _isTestingAudio
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.volume_up),
+              label: Text(_isTestingAudio ? 'Test en cours…' : 'Tester le son'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+            if (_testAudioError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Échec du test audio : $_testAudioError',
+                key: const Key('test_audio_error'),
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ],
             const SizedBox(height: 12),
             FilledButton.icon(
               key: const Key('save_player_configuration'),

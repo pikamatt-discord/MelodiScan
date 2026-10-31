@@ -21,6 +21,7 @@ class FakeMidiPlayback implements MidiPlayback {
   int playCount = 0;
   int pauseCount = 0;
   int stopCount = 0;
+  int testNoteCount = 0;
   int disposeCount = 0;
   bool playing = false;
   int currentTick = 0;
@@ -28,6 +29,14 @@ class FakeMidiPlayback implements MidiPlayback {
   @override
   Future<void> prepare(Uint8List midiBytes) async {
     preparedBytes = midiBytes;
+  }
+
+  @override
+  Future<void> testNote({
+    required int instrumentProgram,
+    required int volumePercent,
+  }) async {
+    testNoteCount++;
   }
 
   @override
@@ -313,6 +322,10 @@ void main() {
     expect(find.byKey(const Key('volume_slider')), findsOneWidget);
     expect(GeneralMidiInstrument.all, hasLength(128));
 
+    await tester.tap(find.byKey(const Key('test_audio_button')));
+    await tester.pumpAndSettle();
+    expect(playback.testNoteCount, 1);
+
     await tester.tap(find.byKey(const Key('instrument_selector')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('2. Bright Acoustic Piano').last);
@@ -411,7 +424,7 @@ void main() {
     await tester.tap(find.text('Piano roll'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('play_pause_fab')));
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     playback.currentTick = 48;
     await tester.pump(const Duration(milliseconds: 100));
@@ -420,5 +433,8 @@ void main() {
     expect(find.byKey(const Key('piano_roll_view')), findsOneWidget);
     expect(find.text('50 %'), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const Key('play_pause_fab')));
+    await tester.pump();
   });
 }
