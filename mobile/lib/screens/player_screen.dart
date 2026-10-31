@@ -8,6 +8,8 @@ import 'package:http/http.dart' as http;
 import '../models/musicxml_score.dart';
 import '../models/midi_visualization.dart';
 import '../network/api_client.dart';
+import 'player_configuration_screen.dart';
+import '../services/midi_configuration.dart';
 import '../services/midi_playback.dart';
 import '../widgets/traditional_score.dart';
 
@@ -38,6 +40,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Uint8List? _midiBytes;
   MidiVisualization? _visualization;
   MusicXmlScore? _score;
+  MidiPlayerConfiguration? _configuration;
   String? _errorMessage;
   String? _playbackError;
   bool _isPreparingPlayback = false;
@@ -65,6 +68,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _midiBytes = null;
       _visualization = null;
       _score = null;
+      _configuration = null;
     });
 
     try {
@@ -99,6 +103,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             'Le serveur n’a pas renvoyé un fichier MIDI valide.');
       }
       final visualization = MidiVisualization.parse(bytes);
+      final configuration = MidiConfiguration.defaultsFor(bytes);
       final score = MusicXmlScore.parse(
         utf8.decode(musicXmlResponse.bodyBytes),
         ticksPerBeat: visualization.ticksPerBeat,
@@ -109,6 +114,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _midiBytes = bytes;
           _visualization = visualization;
           _score = score;
+          _configuration = configuration;
           _isLoading = false;
         });
       }
@@ -156,6 +162,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await operation;
   }
 
+  Future<void> _openConfiguration() async {
+    final configuration = _configuration;
+    if (configuration == null || _isPlaying || _isPreparingPlayback) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerConfigurationScreen(
+          initialConfiguration: configuration,
+          onSave: (updatedConfiguration) async {
+            if (!mounted) return;
+            setState(() {
+              _configuration = updatedConfiguration;
+              _hasPreparedPlayback = false;
+              _playbackComplete = false;
+              _currentTick = 0;
+              _playbackError = null;
+            });
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> _runPlaybackAction() async {
     final wasPlaying = _isPlaying;
     setState(() {
@@ -165,7 +193,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     try {
       if (!_hasPreparedPlayback) {
-        await _playback.prepare(_midiBytes!);
+        final configuredBytes =
+            MidiConfiguration.apply(_midiBytes!, _configuration!);
+        await _playback.prepare(configuredBytes);
         _hasPreparedPlayback = true;
       }
 
@@ -301,7 +331,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            key: const Key('player_configuration_button'),
+            onPressed: _isLoading || _isPlaying || _isPreparingPlayback
+                ? null
+                : _openConfiguration,
+            tooltip: 'Configurer la lecture',
+            icon: const Icon(Icons.tune),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
@@ -340,11 +382,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildMidiResult(ThemeData theme) {
-    final resultUrl = '${widget.serverUrl}/api/v1/result/${widget.taskId}';
     final playbackSupported = _playback.isSupported;
     final visualization = _visualization!;
     final score = _score!;
+    final configuration = _configuration!;
     final pitchRange = _pitchRange(visualization.notes);
+    final progress = (visualization.totalTicks == 0
+            ? 0.0
+            : _currentTick / visualization.totalTicks)
+        .clamp(0.0, 1.0);
+    final activeMeasure = score.measures.isEmpty
+        ? 0
+        : score.measures
+            .indexWhere((measure) => _currentTick < measure.endTick);
+    final measureNumber =
+        activeMeasure < 0 ? score.measures.length : activeMeasure + 1;
+    final instrument =
+        GeneralMidiInstrument.byProgram(configuration.instrumentProgram);
     final activePitches = {
       for (final note in visualization.notes)
         if (_currentTick >= note.startTick && _currentTick < note.endTick)
@@ -354,7 +408,49 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor:
+                        theme.colorScheme.primary.withValues(alpha: 0.16),
+                    child: Icon(Icons.music_note,
+                        color: theme.colorScheme.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '${instrument.name}  ·  ${configuration.tempoBpm} BPM  ·  ${visualization.notes.length} notes',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: Colors.white60),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
           child: SegmentedButton<bool>(
             key: const Key('player_view_mode'),
             showSelectedIcon: false,
@@ -376,40 +472,88 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
         ),
         Expanded(
-          child: _showPianoRoll
-              ? Column(
-                  children: [
-                    Expanded(
-                      child: _PianoRoll(
-                        notes: visualization.notes,
-                        ticksPerBeat: visualization.ticksPerBeat,
-                        currentTick: _currentTick,
-                        lowPitch: pitchRange.$1,
-                        highPitch: pitchRange.$2,
-                      ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: _showPianoRoll
+                  ? Column(
+                      children: [
+                        Expanded(
+                          child: _PianoRoll(
+                            notes: visualization.notes,
+                            ticksPerBeat: visualization.ticksPerBeat,
+                            currentTick: _currentTick,
+                            lowPitch: pitchRange.$1,
+                            highPitch: pitchRange.$2,
+                          ),
+                        ),
+                        SizedBox(
+                          height: 72,
+                          child: _PianoKeyboard(
+                            lowPitch: pitchRange.$1,
+                            highPitch: pitchRange.$2,
+                            activePitches: activePitches,
+                          ),
+                        ),
+                      ],
+                    )
+                  : TraditionalScore(
+                      score: score,
+                      currentTick: _currentTick,
                     ),
-                    SizedBox(
-                      height: 72,
-                      child: _PianoKeyboard(
-                        lowPitch: pitchRange.$1,
-                        highPitch: pitchRange.$2,
-                        activePitches: activePitches,
-                      ),
-                    ),
-                  ],
-                )
-              : TraditionalScore(score: score, currentTick: _currentTick),
+            ),
+          ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: Row(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+          child: Column(
             children: [
-              Text(
-                '${_midiBytes!.length} octets',
-                style: Theme.of(context).textTheme.bodySmall,
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  key: const Key('playback_progress'),
+                  value: progress,
+                  minHeight: 5,
+                ),
               ),
-              const Spacer(),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Text(
+                    score.measures.isEmpty
+                        ? 'Mesure —'
+                        : 'Mesure $measureNumber / ${score.measures.length}',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: Colors.white60),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${(progress * 100).round()} %',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: Colors.white60),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
               if (playbackSupported) ...[
+                IconButton.filledTonal(
+                  key: const Key('stop_playback'),
+                  onPressed: _isPreparingPlayback || !_hasPreparedPlayback
+                      ? null
+                      : _stopPlayback,
+                  tooltip: 'Arrêter et revenir au début',
+                  icon: const Icon(Icons.stop_rounded),
+                  iconSize: 28,
+                ),
+                const SizedBox(width: 14),
                 FilledButton.icon(
                   key: const Key('play_pause_fab'),
                   onPressed: _isPreparingPlayback ? null : _togglePlayback,
@@ -419,7 +563,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                      : Icon(
+                          _isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
                   label: Text(
                     _isPreparingPlayback
                         ? 'Préparation…'
@@ -429,14 +577,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 ? 'Rejouer'
                                 : 'Lire',
                   ),
-                ),
-                IconButton(
-                  key: const Key('stop_playback'),
-                  onPressed: _isPreparingPlayback || !_hasPreparedPlayback
-                      ? null
-                      : _stopPlayback,
-                  tooltip: 'Arrêter',
-                  icon: const Icon(Icons.stop),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 28,
+                      vertical: 14,
+                    ),
+                  ),
                 ),
               ] else
                 const Text('Lecture disponible sur Android 7+'),
@@ -450,7 +596,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               'La première lecture télécharge la banque sonore GM (32 Mo). '
               'Elle sera ensuite disponible hors ligne.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11),
+              style: TextStyle(fontSize: 11, color: Colors.white60),
             ),
           ),
         if (_playbackError != null)
@@ -462,14 +608,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
               textAlign: TextAlign.center,
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: SelectableText(
-            resultUrl,
-            style: Theme.of(context).textTheme.labelSmall,
-            maxLines: 1,
-          ),
-        ),
       ],
     );
   }

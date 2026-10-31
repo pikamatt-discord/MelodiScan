@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:dart_midi_pro/dart_midi_pro.dart';
 import 'package:melodiscan_mobile/models/midi_visualization.dart';
 import 'package:melodiscan_mobile/screens/player_screen.dart';
+import 'package:melodiscan_mobile/services/midi_configuration.dart';
 import 'package:melodiscan_mobile/services/midi_playback.dart';
 
 class FakeMidiPlayback implements MidiPlayback {
@@ -146,6 +148,84 @@ void main() {
     expect(visualization.notes.single.endTick, 96);
   });
 
+  test('Playback settings rewrite instrument, tempo, and volume', () {
+    final configured = MidiConfiguration.apply(
+      validMidiBytes,
+      const MidiPlayerConfiguration(
+        instrumentProgram: 73,
+        tempoBpm: 90,
+        volumePercent: 50,
+      ),
+    );
+    final midi = MidiParser().parseMidiFromBuffer(configured);
+    final events = midi.tracks.expand((track) => track).toList();
+
+    expect(
+      events.whereType<ProgramChangeMidiEvent>().single.programNumber,
+      73,
+    );
+    expect(
+      events.whereType<SetTempoEvent>().single.microsecondsPerBeat,
+      666667,
+    );
+    expect(
+      events
+          .whereType<ControllerEvent>()
+          .singleWhere((event) => event.controllerType == 7)
+          .value,
+      50,
+    );
+    final note = MidiVisualization.parse(configured).notes.single;
+    expect(note.startTick, 0);
+    expect(note.endTick, 96);
+  });
+
+  test('A delayed tempo change keeps the selected tempo from tick zero', () {
+    final midiBytes = Uint8List.fromList(
+      MidiWriter().writeMidiToBuffer(
+        MidiFile(
+          [
+            [
+              NoteOnEvent()
+                ..channel = 0
+                ..noteNumber = 60
+                ..velocity = 80,
+              SetTempoEvent()
+                ..deltaTime = 48
+                ..microsecondsPerBeat = 400000,
+              NoteOffEvent()
+                ..deltaTime = 48
+                ..channel = 0
+                ..noteNumber = 60,
+              EndOfTrackEvent(),
+            ],
+          ],
+          MidiHeader(format: 0, numTracks: 1, ticksPerBeat: 96),
+        ),
+      ),
+    );
+    final defaults = MidiConfiguration.defaultsFor(midiBytes);
+    final configured = MidiParser().parseMidiFromBuffer(
+      MidiConfiguration.apply(
+        midiBytes,
+        const MidiPlayerConfiguration(
+          instrumentProgram: 0,
+          tempoBpm: 90,
+          volumePercent: 100,
+        ),
+      ),
+    );
+    final tempos = configured.tracks
+        .expand((track) => track)
+        .whereType<SetTempoEvent>()
+        .toList();
+
+    expect(defaults.tempoBpm, 120);
+    expect(tempos, hasLength(2));
+    expect(tempos.first.microsecondsPerBeat, 666667);
+    expect(tempos.last.microsecondsPerBeat, 533334);
+  });
+
   testWidgets('PlayerScreen plays, pauses, and stops a verified MIDI result',
       (tester) async {
     final client = MockClient((request) async => _playerResponse(request));
@@ -167,8 +247,8 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('Symphonie No. 5'), findsOneWidget);
-    expect(find.text('34 octets'), findsOneWidget);
+    expect(find.text('Symphonie No. 5'), findsNWidgets(2));
+    expect(find.textContaining('Acoustic Grand Piano'), findsOneWidget);
     expect(find.text('Partition'), findsOneWidget);
     expect(find.byKey(const Key('traditional_score_view')), findsOneWidget);
     expect(find.text('Lire'), findsOneWidget);
@@ -184,7 +264,17 @@ void main() {
     await tester.tap(find.byKey(const Key('play_pause_fab')));
     await tester.pumpAndSettle();
     expect(find.text('Pause'), findsOneWidget);
-    expect(playback.preparedBytes, equals(validMidiBytes));
+    expect(playback.preparedBytes, isNot(equals(validMidiBytes)));
+    final preparedMidi =
+        MidiParser().parseMidiFromBuffer(playback.preparedBytes!);
+    expect(
+      preparedMidi.tracks
+          .expand((track) => track)
+          .whereType<ProgramChangeMidiEvent>()
+          .single
+          .programNumber,
+      0,
+    );
     expect(playback.playCount, 1);
 
     await tester.tap(find.byKey(const Key('play_pause_fab')));
@@ -195,6 +285,38 @@ void main() {
     await tester.tap(find.byKey(const Key('stop_playback')));
     await tester.pumpAndSettle();
     expect(playback.stopCount, 1);
+  });
+
+  testWidgets('Player configuration exposes instrument, tempo, and volume',
+      (tester) async {
+    final client = MockClient((request) async => _playerResponse(request));
+    final playback = FakeMidiPlayback();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerScreen(
+          taskId: 'settings_task',
+          title: 'Partition',
+          serverUrl: 'http://localhost:8080',
+          httpClient: client,
+          midiPlayback: playback,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('player_configuration_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Configuration du lecteur'), findsOneWidget);
+    expect(find.byKey(const Key('instrument_selector')), findsOneWidget);
+    expect(find.byKey(const Key('tempo_slider')), findsOneWidget);
+    expect(find.byKey(const Key('volume_slider')), findsOneWidget);
+    expect(GeneralMidiInstrument.all, hasLength(128));
+
+    await tester.tap(find.byKey(const Key('save_player_configuration')));
+    await tester.pumpAndSettle();
+    expect(find.text('Configuration du lecteur'), findsNothing);
+    expect(find.textContaining('120 BPM'), findsOneWidget);
   });
 
   testWidgets(

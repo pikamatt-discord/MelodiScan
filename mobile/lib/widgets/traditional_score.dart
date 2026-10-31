@@ -19,7 +19,7 @@ class TraditionalScore extends StatefulWidget {
 }
 
 class _TraditionalScoreState extends State<TraditionalScore> {
-  static const _systemHeight = 132.0;
+  static const _systemHeight = 176.0;
   final _scrollController = ScrollController();
   int _lastScrolledSystem = 0;
 
@@ -108,8 +108,8 @@ class _ScoreSystemPainter extends CustomPainter {
 
   static const _left = 10.0;
   static const _right = 10.0;
-  static const _staffTop = 34.0;
-  static const _lineGap = 9.0;
+  static const _staffTop = 48.0;
+  static const _lineGap = 11.0;
   static const _bottomLine = _staffTop + 4 * _lineGap;
 
   @override
