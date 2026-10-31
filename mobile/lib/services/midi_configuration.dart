@@ -160,9 +160,14 @@ class MidiConfiguration {
 
   static MidiPlayerConfiguration defaultsFor(Uint8List bytes) {
     final midi = MidiParser().parseMidiFromBuffer(bytes);
-    final programs = midi.tracks
-        .expand((track) => track)
-        .whereType<ProgramChangeMidiEvent>();
+    final events = midi.tracks.expand((track) => track).toList();
+    final noteChannels = events
+        .whereType<NoteOnEvent>()
+        .where((event) => event.velocity > 0)
+        .map((event) => event.channel)
+        .toSet();
+    final programs = events.whereType<ProgramChangeMidiEvent>().where(
+        (event) => event.channel != 9 && noteChannels.contains(event.channel));
     final tempos = <(int tick, int microseconds)>[];
     for (final track in midi.tracks) {
       var tick = 0;

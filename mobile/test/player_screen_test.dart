@@ -313,10 +313,28 @@ void main() {
     expect(find.byKey(const Key('volume_slider')), findsOneWidget);
     expect(GeneralMidiInstrument.all, hasLength(128));
 
+    await tester.tap(find.byKey(const Key('instrument_selector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2. Bright Acoustic Piano').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('save_player_configuration')));
     await tester.pumpAndSettle();
     expect(find.text('Configuration du lecteur'), findsNothing);
     expect(find.textContaining('120 BPM'), findsOneWidget);
+    expect(find.textContaining('Bright Acoustic Piano'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('play_pause_fab')));
+    await tester.pumpAndSettle();
+    final preparedMidi =
+        MidiParser().parseMidiFromBuffer(playback.preparedBytes!);
+    expect(
+      preparedMidi.tracks
+          .expand((track) => track)
+          .whereType<ProgramChangeMidiEvent>()
+          .single
+          .programNumber,
+      1,
+    );
   });
 
   testWidgets(
