@@ -38,6 +38,7 @@ class _StatusScreenState extends State<StatusScreen> {
   bool _isCompleted = false;
   String? _errorMessage;
   StreamSubscription<String>? _streamSubscription;
+  bool _isConnecting = true;
 
   @override
   void initState() {
@@ -57,6 +58,7 @@ class _StatusScreenState extends State<StatusScreen> {
       final response =
           await client.send(request).timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) {
+        if (mounted) setState(() => _isConnecting = false);
         final body = await response.stream.bytesToString();
         _setError(_responseError(response.statusCode, body));
         return;
@@ -76,7 +78,9 @@ class _StatusScreenState extends State<StatusScreen> {
               }
             },
           );
+      if (mounted) setState(() => _isConnecting = false);
     } catch (error) {
+      _isConnecting = false;
       _setError('Impossible de suivre le traitement : $error');
     }
   }
@@ -166,226 +170,389 @@ class _StatusScreenState extends State<StatusScreen> {
     }
   }
 
+  String _getStageDescription(String stage) {
+    switch (stage) {
+      case 'STATUS_QUEUED':
+        return 'Votre demande attend qu’un worker soit disponible.';
+      case 'STATUS_PROCESSING_IMAGE':
+        return 'Vérification et préparation de l’image envoyée.';
+      case 'STATUS_RUNNING_OMR':
+        return 'Audiveris repère les portées et reconnaît les notes.';
+      case 'STATUS_BUILDING_MUSICXML':
+        return 'La partition reconnue est mise en forme.';
+      case 'STATUS_EXPORTING_MIDI':
+        return 'Création du fichier MIDI à écouter.';
+      case 'STATUS_COMPLETED':
+        return 'Votre partition et votre fichier MIDI sont prêts.';
+      default:
+        return 'Préparation de votre partition.';
+    }
+  }
+
+  IconData _getStageIcon(String stage) {
+    switch (stage) {
+      case 'STATUS_QUEUED':
+        return Icons.hourglass_top_rounded;
+      case 'STATUS_PROCESSING_IMAGE':
+        return Icons.image_search_rounded;
+      case 'STATUS_RUNNING_OMR':
+        return Icons.music_note_rounded;
+      case 'STATUS_BUILDING_MUSICXML':
+        return Icons.auto_awesome_rounded;
+      case 'STATUS_EXPORTING_MIDI':
+        return Icons.piano_rounded;
+      case 'STATUS_COMPLETED':
+        return Icons.check_rounded;
+      default:
+        return Icons.sync_rounded;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final progress = _currentStageIndex / (_stages.length - 1);
+    final currentStage = _stages[_currentStageIndex];
+    final title = _errorMessage != null
+        ? 'Traitement interrompu'
+        : _isCompleted
+            ? 'Votre partition est prête'
+            : _getStageLabel(currentStage);
+    final description = _errorMessage != null
+        ? 'Le suivi du traitement a rencontré une erreur.'
+        : _isConnecting
+            ? 'Connexion au serveur de traitement…'
+            : _getStageDescription(currentStage);
 
     return Scaffold(
       appBar: AppBar(
         title: Text('Traitement : ${widget.title}'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Task Progress Card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.terminal_rounded,
-                                size: 18, color: theme.colorScheme.primary),
-                            const SizedBox(width: 8),
-                            Text(
-                              'ID : ${widget.taskId.substring(0, widget.taskId.length > 12 ? 12 : widget.taskId.length)}...',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade400,
-                                  fontFamily: 'monospace'),
-                            ),
-                          ],
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _errorMessage != null
-                                ? Colors.red.withAlpha(40)
-                                : _isCompleted
-                                    ? Colors.green.withAlpha(40)
-                                    : theme.colorScheme.primary.withAlpha(40),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            _errorMessage != null
-                                ? 'ÉCHEC'
-                                : _isCompleted
-                                    ? 'TERMINÉ'
-                                    : 'EN COURS',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
                               color: _errorMessage != null
-                                  ? Colors.red
+                                  ? theme.colorScheme.error
+                                      .withValues(alpha: 0.14)
                                   : _isCompleted
-                                      ? Colors.green
+                                      ? theme.colorScheme.secondary
+                                          .withValues(alpha: 0.14)
+                                      : theme.colorScheme.primary
+                                          .withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Icon(
+                              _errorMessage != null
+                                  ? Icons.error_outline_rounded
+                                  : _getStageIcon(currentStage),
+                              color: _errorMessage != null
+                                  ? theme.colorScheme.error
+                                  : _isCompleted
+                                      ? theme.colorScheme.secondary
                                       : theme.colorScheme.primary,
+                              size: 28,
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: LinearProgressIndicator(
-                        value: progress,
-                        minHeight: 10,
-                        backgroundColor: Colors.white10,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          _isCompleted
-                              ? theme.colorScheme.secondary
-                              : theme.colorScheme.primary,
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 220),
+                                  child: Text(
+                                    title,
+                                    key: ValueKey(title),
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  description,
+                                  key:
+                                      const Key('processing_stage_description'),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: Colors.white70,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 22),
+                      Row(
+                        children: [
+                          Text(
+                            _isCompleted
+                                ? 'Traitement terminé'
+                                : 'Progression du traitement',
+                            style: theme.textTheme.labelLarge,
+                          ),
+                          const Spacer(),
+                          Text(
+                            'Étape ${_currentStageIndex + 1} / ${_stages.length}',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: TweenAnimationBuilder<double>(
+                          key: const Key('processing_progress'),
+                          tween: Tween<double>(end: progress),
+                          duration: const Duration(milliseconds: 450),
+                          curve: Curves.easeOutCubic,
+                          builder: (context, value, _) =>
+                              LinearProgressIndicator(
+                            value: value,
+                            minHeight: 8,
+                            backgroundColor: Colors.white10,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              _isCompleted
+                                  ? theme.colorScheme.secondary
+                                  : theme.colorScheme.primary,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      _errorMessage == null
-                          ? '${(progress * 100).toInt()}% Complété'
-                          : 'Traitement interrompu',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            const Text(
-              'Flux SSE du Serveur Domestique :',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-
-            if (_errorMessage != null)
-              Card(
-                color: Colors.red.withAlpha(30),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.redAccent),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Icon(
+                            _isConnecting
+                                ? Icons.cloud_sync_rounded
+                                : Icons.cloud_done_rounded,
+                            size: 15,
+                            color: Colors.white54,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              _isConnecting
+                                  ? 'Connexion au serveur…'
+                                  : 'Traitement sur votre serveur',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: Colors.white54,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            'ID ${widget.taskId.substring(0, widget.taskId.length > 12 ? 12 : widget.taskId.length)}',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: Colors.white38,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-
-            // Animated Timeline ListView
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.account_tree_rounded, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Étapes de conversion',
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  if (_errorMessage != null)
+                    Text(
+                      'ÉCHEC',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.error,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  else if (_isCompleted)
+                    Text(
+                      'TERMINÉ',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.secondary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  else
+                    Text(
+                      'EN COURS',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                ],
+              ),
+            ),
             Expanded(
               child: ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                 itemCount: _stages.length,
                 itemBuilder: (context, index) {
                   final stage = _stages[index];
-                  final isDone =
-                      _errorMessage == null && index < _currentStageIndex;
-                  final isCurrent =
-                      _errorMessage == null && index == _currentStageIndex;
+                  final isDone = _errorMessage == null &&
+                      (index < _currentStageIndex ||
+                          (_isCompleted && index == _currentStageIndex));
+                  final isCurrent = _errorMessage == null &&
+                      !_isCompleted &&
+                      index == _currentStageIndex;
+                  final accent = isDone
+                      ? theme.colorScheme.secondary
+                      : theme.colorScheme.primary;
 
-                  return Container(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: isCurrent
-                          ? theme.colorScheme.primary.withAlpha(30)
-                          : isDone
-                              ? Colors.green.withAlpha(20)
-                              : theme.colorScheme.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: AnimatedContainer(
+                      key: ValueKey('processing_stage_$stage'),
+                      duration: const Duration(milliseconds: 220),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
                         color: isCurrent
-                            ? theme.colorScheme.primary
-                            : isDone
-                                ? Colors.green.withAlpha(150)
-                                : Colors.white.withAlpha(10),
-                        width: isCurrent ? 2.0 : 1.0,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: isDone
-                                ? Colors.green.withAlpha(40)
-                                : isCurrent
-                                    ? theme.colorScheme.primary.withAlpha(40)
-                                    : Colors.white10,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            isDone
-                                ? Icons.check_circle_rounded
-                                : isCurrent
-                                    ? Icons.sync_rounded
-                                    : Icons.radio_button_unchecked_rounded,
-                            color: isDone
-                                ? Colors.green
-                                : isCurrent
-                                    ? theme.colorScheme.primary
-                                    : Colors.grey,
-                            size: 20,
-                          ),
+                            ? theme.colorScheme.primary.withValues(alpha: 0.11)
+                            : theme.colorScheme.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isCurrent
+                              ? theme.colorScheme.primary.withValues(alpha: 0.8)
+                              : isDone
+                                  ? theme.colorScheme.secondary
+                                      .withValues(alpha: 0.35)
+                                  : Colors.white.withValues(alpha: 0.06),
+                          width: isCurrent ? 1.5 : 1,
                         ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Text(
-                            _getStageLabel(stage),
-                            style: TextStyle(
-                              color: isCurrent || isDone
-                                  ? Colors.white
-                                  : Colors.grey.shade400,
-                              fontWeight: isCurrent
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                              fontSize: 14,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: isDone || isCurrent
+                                  ? accent.withValues(alpha: 0.16)
+                                  : Colors.white.withValues(alpha: 0.05),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              isDone
+                                  ? Icons.check_rounded
+                                  : isCurrent
+                                      ? _getStageIcon(stage)
+                                      : Icons.radio_button_unchecked_rounded,
+                              color:
+                                  isDone || isCurrent ? accent : Colors.white38,
+                              size: 19,
                             ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _getStageLabel(stage),
+                                  style: TextStyle(
+                                    color: isCurrent || isDone
+                                        ? Colors.white
+                                        : Colors.white54,
+                                    fontWeight: isCurrent
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                                if (isCurrent) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    _getStageDescription(stage),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: Colors.white60,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (isCurrent)
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                key: const Key('processing_activity_indicator'),
+                                strokeWidth: 2,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   );
                 },
               ),
             ),
-            if (_isCompleted) ...[
-              Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: LinearGradient(
-                    colors: [
-                      theme.colorScheme.secondary,
-                      theme.colorScheme.secondary.withAlpha(200),
-                    ],
+            if (_isCompleted)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _navigateToPlayer,
+                    icon: const Icon(Icons.play_circle_fill_rounded),
+                    label: const Text('Ouvrir le lecteur MIDI'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
                   ),
                 ),
-                child: ElevatedButton.icon(
-                  onPressed: _navigateToPlayer,
-                  icon: const Icon(Icons.play_circle_fill_rounded,
-                      color: Colors.black),
-                  label: const Text(
-                    'Voir le résultat MIDI',
-                    style: TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
+              )
+            else if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: Card(
+                  color: theme.colorScheme.error.withValues(alpha: 0.12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Icon(Icons.error_outline,
+                            color: theme.colorScheme.error),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _errorMessage!,
+                            style: TextStyle(color: theme.colorScheme.error),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ],
           ],
         ),
       ),

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/musicxml_score.dart';
@@ -12,20 +13,27 @@ class TraditionalScore extends StatefulWidget {
   });
 
   final MusicXmlScore score;
-  final int currentTick;
+  final ValueListenable<int> currentTick;
 
   @override
   State<TraditionalScore> createState() => _TraditionalScoreState();
 }
 
-class _TraditionalScoreState extends State<TraditionalScore> {
+class _TraditionalScoreState extends State<TraditionalScore>
+    with SingleTickerProviderStateMixin {
   static const _systemHeight = 176.0;
   final _scrollController = ScrollController();
+  late final AnimationController _cursorController;
+  late final ValueNotifier<double> _smoothTick;
+  late Animation<double> _cursorAnimation;
+  late DateTime _lastPositionUpdate;
   int _lastScrolledSystem = 0;
+  int _measuresPerSystem = 1;
 
   int _measureIndexAtTick() {
+    if (widget.score.measures.isEmpty) return 0;
     for (var index = 0; index < widget.score.measures.length; index++) {
-      if (widget.currentTick < widget.score.measures[index].endTick) {
+      if (widget.currentTick.value < widget.score.measures[index].endTick) {
         return index;
       }
     }
@@ -33,7 +41,77 @@ class _TraditionalScoreState extends State<TraditionalScore> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    final tick = widget.currentTick.value.toDouble();
+    _cursorController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 80),
+    )..addListener(_updateSmoothedTick);
+    _smoothTick = ValueNotifier<double>(tick);
+    _cursorAnimation = AlwaysStoppedAnimation<double>(tick);
+    _lastPositionUpdate = DateTime.now();
+    widget.currentTick.addListener(_handlePositionChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant TraditionalScore oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentTick != widget.currentTick) {
+      oldWidget.currentTick.removeListener(_handlePositionChanged);
+      widget.currentTick.addListener(_handlePositionChanged);
+      _cursorController.stop();
+      _smoothTick.value = widget.currentTick.value.toDouble();
+      _lastPositionUpdate = DateTime.now();
+    }
+  }
+
+  void _updateSmoothedTick() {
+    _smoothTick.value = _cursorAnimation.value;
+  }
+
+  void _handlePositionChanged() {
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastPositionUpdate);
+    _lastPositionUpdate = now;
+    final duration = Duration(
+      milliseconds: elapsed.inMilliseconds.clamp(24, 120).toInt(),
+    );
+    _cursorController
+      ..stop()
+      ..duration = duration;
+    _cursorAnimation = Tween<double>(
+      begin: _smoothTick.value,
+      end: widget.currentTick.value.toDouble(),
+    ).animate(_cursorController);
+    _cursorController.forward(from: 0);
+    _scrollToActiveSystem();
+  }
+
+  void _scrollToActiveSystem() {
+    final systemIndex = _measureIndexAtTick() ~/ _measuresPerSystem;
+    if (systemIndex == _lastScrolledSystem) return;
+    _lastScrolledSystem = systemIndex;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      final offset = systemIndex * _systemHeight;
+      _scrollController.animateTo(
+        offset.clamp(
+          0.0,
+          _scrollController.position.maxScrollExtent,
+        ),
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  @override
   void dispose() {
+    widget.currentTick.removeListener(_handlePositionChanged);
+    _cursorController.removeListener(_updateSmoothedTick);
+    _cursorController.dispose();
+    _smoothTick.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -42,27 +120,12 @@ class _TraditionalScoreState extends State<TraditionalScore> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final measuresPerSystem =
+        _measuresPerSystem =
             math.max(1, ((constraints.maxWidth - 68) / 190).floor());
-        final systemIndex = _measureIndexAtTick() ~/ measuresPerSystem;
-        if (systemIndex != _lastScrolledSystem) {
-          _lastScrolledSystem = systemIndex;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!_scrollController.hasClients) return;
-            final offset = systemIndex * _systemHeight;
-            _scrollController.animateTo(
-              offset.clamp(
-                0.0,
-                _scrollController.position.maxScrollExtent,
-              ),
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOut,
-            );
-          });
-        }
+        _scrollToActiveSystem();
 
         final systemCount =
-            (widget.score.measures.length / measuresPerSystem).ceil();
+            (widget.score.measures.length / _measuresPerSystem).ceil();
         return ColoredBox(
           key: const Key('traditional_score_view'),
           color: const Color(0xFFFFFEFA),
@@ -71,19 +134,36 @@ class _TraditionalScoreState extends State<TraditionalScore> {
             itemExtent: _systemHeight,
             itemCount: systemCount,
             itemBuilder: (context, systemIndex) {
-              final start = systemIndex * measuresPerSystem;
+              final start = systemIndex * _measuresPerSystem;
               final end = math.min(
-                start + measuresPerSystem,
+                start + _measuresPerSystem,
                 widget.score.measures.length,
               );
-              return CustomPaint(
-                painter: _ScoreSystemPainter(
-                  measures: widget.score.measures.sublist(start, end),
-                  firstMeasureIndex: start,
-                  currentTick: widget.currentTick,
-                  textDirection: Directionality.of(context),
-                ),
-                child: const SizedBox.expand(),
+              final measures = widget.score.measures.sublist(start, end);
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  RepaintBoundary(
+                    child: CustomPaint(
+                      painter: _ScoreSystemPainter(
+                        measures: measures,
+                        firstMeasureIndex: start,
+                        textDirection: Directionality.of(context),
+                      ),
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                  RepaintBoundary(
+                    child: CustomPaint(
+                      painter: _ScorePlaybackPainter(
+                        measures: measures,
+                        firstMeasureIndex: start,
+                        currentTick: _smoothTick,
+                      ),
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -97,13 +177,11 @@ class _ScoreSystemPainter extends CustomPainter {
   _ScoreSystemPainter({
     required this.measures,
     required this.firstMeasureIndex,
-    required this.currentTick,
     required this.textDirection,
   });
 
   final List<ScoreMeasure> measures;
   final int firstMeasureIndex;
-  final int currentTick;
   final TextDirection textDirection;
 
   static const _left = 10.0;
@@ -130,21 +208,6 @@ class _ScoreSystemPainter extends CustomPainter {
       final measureLeft = _left + index * measureWidth;
       final measureRight = measureLeft + measureWidth;
       final isFirst = firstMeasureIndex + index == 0;
-      final isActive =
-          currentTick >= measure.startTick && currentTick < measure.endTick;
-      if (isActive) {
-        final highlight = Paint()
-          ..color = const Color(0xFFFFD54F).withValues(alpha: 0.18);
-        canvas.drawRect(
-          Rect.fromLTRB(
-            measureLeft,
-            _staffTop - 15,
-            measureRight,
-            _bottomLine + 16,
-          ),
-          highlight,
-        );
-      }
 
       if (index > 0) {
         canvas.drawLine(
@@ -202,8 +265,6 @@ class _ScoreSystemPainter extends CustomPainter {
         final measureTicks = math.max(1, measure.endTick - measure.startTick);
         final progress = (note.startTick - measure.startTick) / measureTicks;
         final x = contentLeft + progress * (contentRight - contentLeft);
-        final isHighlighted =
-            currentTick >= note.startTick && currentTick < note.endTick;
         _drawNote(
           canvas,
           note,
@@ -211,22 +272,7 @@ class _ScoreSystemPainter extends CustomPainter {
           measure.clef,
           measure.fifths,
           accidentalState,
-          isHighlighted,
-        );
-      }
-
-      if (isActive) {
-        final measureTicks = math.max(1, measure.endTick - measure.startTick);
-        final progress =
-            ((currentTick - measure.startTick) / measureTicks).clamp(0.0, 1.0);
-        final x = contentLeft + progress * (contentRight - contentLeft);
-        final playhead = Paint()
-          ..color = const Color(0xFFE53935)
-          ..strokeWidth = 1.5;
-        canvas.drawLine(
-          Offset(x, _staffTop - 12),
-          Offset(x, _bottomLine + 12),
-          playhead,
+          false,
         );
       }
     }
@@ -536,7 +582,123 @@ class _ScoreSystemPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ScoreSystemPainter oldDelegate) =>
-      oldDelegate.currentTick != currentTick ||
       oldDelegate.measures != measures ||
       oldDelegate.firstMeasureIndex != firstMeasureIndex;
+}
+
+class _ScorePlaybackPainter extends CustomPainter {
+  _ScorePlaybackPainter({
+    required this.measures,
+    required this.firstMeasureIndex,
+    required this.currentTick,
+  }) : super(repaint: currentTick);
+
+  final List<ScoreMeasure> measures;
+  final int firstMeasureIndex;
+  final ValueListenable<double> currentTick;
+
+  static const _left = 10.0;
+  static const _right = 10.0;
+  static const _staffTop = 48.0;
+  static const _lineGap = 11.0;
+  static const _bottomLine = _staffTop + 4 * _lineGap;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (measures.isEmpty) return;
+    final measureWidth = (size.width - _left - _right) / measures.length;
+    final tick = currentTick.value;
+
+    for (var index = 0; index < measures.length; index++) {
+      final measure = measures[index];
+      if (tick < measure.startTick || tick >= measure.endTick) continue;
+
+      final measureLeft = _left + index * measureWidth;
+      final measureRight = measureLeft + measureWidth;
+      final isFirst = firstMeasureIndex + index == 0;
+      final previous = index > 0 ? measures[index - 1] : null;
+      final clefChanged = previous != null && previous.clef != measure.clef;
+      final keyChanged = previous != null && previous.fifths != measure.fifths;
+      final timeChanged = previous != null &&
+          (previous.beats != measure.beats ||
+              previous.beatType != measure.beatType);
+      final signatureChangeWidth = 10 +
+          (clefChanged ? 25 : 0) +
+          (keyChanged ? math.min(7, measure.fifths.abs()) * 7.0 : 0) +
+          (timeChanged ? 18 : 0);
+      final contentLeft = measureLeft +
+          (isFirst
+              ? 47 + math.min(7, measure.fifths.abs()) * 7.0
+              : clefChanged || keyChanged || timeChanged
+                  ? signatureChangeWidth
+                  : 18);
+      final contentRight = measureRight - 8;
+      final activeHighlight = Paint()
+        ..color = const Color(0xFFFFD54F).withValues(alpha: 0.10);
+      canvas.drawRect(
+        Rect.fromLTRB(
+          measureLeft,
+          _staffTop - 15,
+          measureRight,
+          _bottomLine + 16,
+        ),
+        activeHighlight,
+      );
+
+      final measureTicks = math.max(1, measure.endTick - measure.startTick);
+      final progress =
+          ((tick - measure.startTick) / measureTicks).clamp(0.0, 1.0);
+      final x = contentLeft + progress * (contentRight - contentLeft);
+      final playhead = Paint()
+        ..color = const Color(0xFFE53935)
+        ..strokeWidth = 1.5;
+      canvas.drawLine(
+        Offset(x, _staffTop - 12),
+        Offset(x, _bottomLine + 12),
+        playhead,
+      );
+
+      for (final note in measure.notes) {
+        if (note.isRest || tick < note.startTick || tick >= note.endTick) {
+          continue;
+        }
+        final noteProgress =
+            (note.startTick - measure.startTick) / measureTicks;
+        final noteX = contentLeft + noteProgress * (contentRight - contentLeft);
+        final step = _diatonicStep(note.step, note.octave);
+        final y =
+            _bottomLine - (step - _bottomStep(measure.clef)) * (_lineGap / 2);
+        final noteHead = Paint()
+          ..color = const Color(0xFFE53935)
+          ..style = PaintingStyle.fill;
+        canvas.save();
+        canvas.translate(noteX, y);
+        canvas.rotate(-0.25);
+        canvas.drawOval(
+          Rect.fromCenter(center: Offset.zero, width: 13, height: 9),
+          noteHead,
+        );
+        canvas.restore();
+      }
+      return;
+    }
+  }
+
+  int _bottomStep(ScoreClef clef) => switch (clef) {
+        ScoreClef.bass => _diatonicStep('G', 2),
+        ScoreClef.alto => _diatonicStep('F', 3),
+        ScoreClef.tenor => _diatonicStep('D', 3),
+        _ => _diatonicStep('E', 4),
+      };
+
+  int _diatonicStep(String step, int octave) {
+    const steps = {'C': 0, 'D': 1, 'E': 2, 'F': 3, 'G': 4, 'A': 5, 'B': 6};
+    return octave * 7 + (steps[step] ?? 0);
+  }
+
+  @override
+  bool shouldRepaint(_ScorePlaybackPainter oldDelegate) =>
+      oldDelegate.measures != measures ||
+      oldDelegate.firstMeasureIndex != firstMeasureIndex ||
+      oldDelegate.currentTick != currentTick;
 }

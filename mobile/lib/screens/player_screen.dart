@@ -48,7 +48,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _playbackComplete = false;
   bool _hasPreparedPlayback = false;
   bool _showPianoRoll = false;
-  int _currentTick = 0;
+  final ValueNotifier<int> _playbackPosition = ValueNotifier<int>(0);
   bool _isReadingPosition = false;
   Timer? _positionTimer;
   Future<void>? _playbackOperation;
@@ -69,6 +69,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _visualization = null;
       _score = null;
       _configuration = null;
+      _playbackPosition.value = 0;
     });
 
     try {
@@ -175,7 +176,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               _configuration = updatedConfiguration;
               _hasPreparedPlayback = false;
               _playbackComplete = false;
-              _currentTick = 0;
+              _playbackPosition.value = 0;
               _playbackError = null;
             });
           },
@@ -204,7 +205,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _positionTimer?.cancel();
         final position = await _playback.getPosition();
         if (mounted) {
-          setState(() => _currentTick = position.currentTick);
+          _playbackPosition.value = position.currentTick;
         }
       } else {
         if (_playbackComplete) {
@@ -252,7 +253,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         setState(() {
           _isPlaying = false;
           _playbackComplete = false;
-          _currentTick = 0;
+          _playbackPosition.value = 0;
         });
       }
     } catch (error) {
@@ -270,7 +271,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _startPositionPolling() {
     _positionTimer?.cancel();
     _positionTimer = Timer.periodic(
-      const Duration(milliseconds: 150),
+      const Duration(milliseconds: 80),
       (_) => _refreshPlaybackPosition(),
     );
     unawaited(_refreshPlaybackPosition());
@@ -282,11 +283,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       final position = await _playback.getPosition();
       if (!mounted) return;
-      setState(() {
-        _currentTick = position.currentTick;
-        _isPlaying = position.isPlaying;
-        _playbackComplete = position.isComplete;
-      });
+      _playbackPosition.value = position.currentTick;
+      if (_isPlaying != position.isPlaying ||
+          _playbackComplete != position.isComplete) {
+        setState(() {
+          _isPlaying = position.isPlaying;
+          _playbackComplete = position.isComplete;
+        });
+      }
       if (!position.isPlaying) {
         _positionTimer?.cancel();
       }
@@ -304,6 +308,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void dispose() {
     _positionTimer?.cancel();
+    _playbackPosition.dispose();
     final pendingOperation = _playbackOperation;
     if (pendingOperation == null) {
       unawaited(_disposePlayback());
@@ -387,23 +392,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final score = _score!;
     final configuration = _configuration!;
     final pitchRange = _pitchRange(visualization.notes);
-    final progress = (visualization.totalTicks == 0
-            ? 0.0
-            : _currentTick / visualization.totalTicks)
-        .clamp(0.0, 1.0);
-    final activeMeasure = score.measures.isEmpty
-        ? 0
-        : score.measures
-            .indexWhere((measure) => _currentTick < measure.endTick);
-    final measureNumber =
-        activeMeasure < 0 ? score.measures.length : activeMeasure + 1;
     final instrument =
         GeneralMidiInstrument.byProgram(configuration.instrumentProgram);
-    final activePitches = {
-      for (final note in visualization.notes)
-        if (_currentTick >= note.startTick && _currentTick < note.endTick)
-          note.pitch,
-    };
 
     return Column(
       children: [
@@ -477,66 +467,92 @@ class _PlayerScreenState extends State<PlayerScreen> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(18),
               child: _showPianoRoll
-                  ? Column(
-                      children: [
-                        Expanded(
-                          child: _PianoRoll(
-                            notes: visualization.notes,
-                            ticksPerBeat: visualization.ticksPerBeat,
-                            currentTick: _currentTick,
-                            lowPitch: pitchRange.$1,
-                            highPitch: pitchRange.$2,
-                          ),
-                        ),
-                        SizedBox(
-                          height: 72,
-                          child: _PianoKeyboard(
-                            lowPitch: pitchRange.$1,
-                            highPitch: pitchRange.$2,
-                            activePitches: activePitches,
-                          ),
-                        ),
-                      ],
+                  ? ValueListenableBuilder<int>(
+                      valueListenable: _playbackPosition,
+                      builder: (context, currentTick, _) {
+                        final activePitches = {
+                          for (final note in visualization.notes)
+                            if (currentTick >= note.startTick &&
+                                currentTick < note.endTick)
+                              note.pitch,
+                        };
+                        return Column(
+                          children: [
+                            Expanded(
+                              child: _PianoRoll(
+                                notes: visualization.notes,
+                                ticksPerBeat: visualization.ticksPerBeat,
+                                currentTick: currentTick,
+                                lowPitch: pitchRange.$1,
+                                highPitch: pitchRange.$2,
+                              ),
+                            ),
+                            SizedBox(
+                              height: 72,
+                              child: _PianoKeyboard(
+                                lowPitch: pitchRange.$1,
+                                highPitch: pitchRange.$2,
+                                activePitches: activePitches,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     )
                   : TraditionalScore(
                       score: score,
-                      currentTick: _currentTick,
+                      currentTick: _playbackPosition,
                     ),
             ),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
-          child: Column(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  key: const Key('playback_progress'),
-                  value: progress,
-                  minHeight: 5,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Row(
+        ValueListenableBuilder<int>(
+          valueListenable: _playbackPosition,
+          builder: (context, currentTick, _) {
+            final progress = (visualization.totalTicks == 0
+                    ? 0.0
+                    : currentTick / visualization.totalTicks)
+                .clamp(0.0, 1.0);
+            final activeMeasure = score.measures.isEmpty
+                ? 0
+                : score.measures
+                    .indexWhere((measure) => currentTick < measure.endTick);
+            final measureNumber =
+                activeMeasure < 0 ? score.measures.length : activeMeasure + 1;
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+              child: Column(
                 children: [
-                  Text(
-                    score.measures.isEmpty
-                        ? 'Mesure —'
-                        : 'Mesure $measureNumber / ${score.measures.length}',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: Colors.white60),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      key: const Key('playback_progress'),
+                      value: progress,
+                      minHeight: 5,
+                    ),
                   ),
-                  const Spacer(),
-                  Text(
-                    '${(progress * 100).round()} %',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: Colors.white60),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text(
+                        score.measures.isEmpty
+                            ? 'Mesure —'
+                            : 'Mesure $measureNumber / ${score.measures.length}',
+                        style: theme.textTheme.labelSmall
+                            ?.copyWith(color: Colors.white60),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${(progress * 100).round()} %',
+                        style: theme.textTheme.labelSmall
+                            ?.copyWith(color: Colors.white60),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ),
+            );
+          },
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),

@@ -32,8 +32,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Traitement : Test Symphony'), findsOneWidget);
+    expect(find.text('Votre partition est prête'), findsOneWidget);
+    expect(
+      find.text('Votre partition et votre fichier MIDI sont prêts.'),
+      findsOneWidget,
+    );
     expect(find.text('TERMINÉ'), findsOneWidget);
-    expect(find.text('Voir le résultat MIDI'), findsOneWidget);
+    expect(find.text('Ouvrir le lecteur MIDI'), findsOneWidget);
   });
 
   testWidgets(
