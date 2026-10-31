@@ -23,6 +23,7 @@ class FakeMidiPlayback implements MidiPlayback {
   int stopCount = 0;
   int disposeCount = 0;
   bool playing = false;
+  int currentTick = 0;
 
   @override
   Future<void> prepare(Uint8List midiBytes) async {
@@ -50,7 +51,7 @@ class FakeMidiPlayback implements MidiPlayback {
   @override
   Future<MidiPlaybackPosition> getPosition() async {
     return MidiPlaybackPosition(
-      currentTick: 0,
+      currentTick: currentTick,
       totalTicks: 96,
       isPlaying: playing,
       isComplete: false,
@@ -389,5 +390,35 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('play_pause_fab')), findsNothing);
+  });
+
+  testWidgets('Piano roll follows playback position updates', (tester) async {
+    final client = MockClient((request) async => _playerResponse(request));
+    final playback = FakeMidiPlayback();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerScreen(
+          taskId: 'piano_roll_task',
+          title: 'Piano roll test',
+          serverUrl: 'http://localhost:8080',
+          httpClient: client,
+          midiPlayback: playback,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Piano roll'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('play_pause_fab')));
+    await tester.pumpAndSettle();
+
+    playback.currentTick = 48;
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const Key('piano_roll_view')), findsOneWidget);
+    expect(find.text('50 %'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -467,37 +468,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(18),
               child: _showPianoRoll
-                  ? ValueListenableBuilder<int>(
-                      valueListenable: _playbackPosition,
-                      builder: (context, currentTick, _) {
-                        final activePitches = {
-                          for (final note in visualization.notes)
-                            if (currentTick >= note.startTick &&
-                                currentTick < note.endTick)
-                              note.pitch,
-                        };
-                        return Column(
-                          children: [
-                            Expanded(
-                              child: _PianoRoll(
-                                notes: visualization.notes,
-                                ticksPerBeat: visualization.ticksPerBeat,
-                                currentTick: currentTick,
-                                lowPitch: pitchRange.$1,
-                                highPitch: pitchRange.$2,
-                              ),
-                            ),
-                            SizedBox(
-                              height: 72,
-                              child: _PianoKeyboard(
-                                lowPitch: pitchRange.$1,
-                                highPitch: pitchRange.$2,
-                                activePitches: activePitches,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
+                  ? _PianoRoll(
+                      notes: visualization.notes,
+                      ticksPerBeat: visualization.ticksPerBeat,
+                      currentTick: _playbackPosition,
+                      lowPitch: pitchRange.$1,
+                      highPitch: pitchRange.$2,
                     )
                   : TraditionalScore(
                       score: score,
@@ -651,7 +627,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-class _PianoRoll extends StatelessWidget {
+class _PianoRoll extends StatefulWidget {
   const _PianoRoll({
     required this.notes,
     required this.ticksPerBeat,
@@ -662,43 +638,230 @@ class _PianoRoll extends StatelessWidget {
 
   final List<MidiNote> notes;
   final int ticksPerBeat;
-  final int currentTick;
+  final ValueListenable<int> currentTick;
   final int lowPitch;
   final int highPitch;
+
+  @override
+  State<_PianoRoll> createState() => _PianoRollState();
+}
+
+class _PianoRollState extends State<_PianoRoll>
+    with SingleTickerProviderStateMixin {
+  late final _PianoRollTimeline _timeline =
+      _PianoRollTimeline(widget.notes, widget.ticksPerBeat);
+  late final AnimationController _cursorController;
+  late final ValueNotifier<double> _smoothTick;
+  late Animation<double> _cursorAnimation;
+  late DateTime _lastPositionUpdate;
+
+  @override
+  void initState() {
+    super.initState();
+    final tick = widget.currentTick.value.toDouble();
+    _cursorController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 80),
+    )..addListener(_updateSmoothedTick);
+    _smoothTick = ValueNotifier<double>(tick);
+    _cursorAnimation = AlwaysStoppedAnimation<double>(tick);
+    _lastPositionUpdate = DateTime.now();
+    widget.currentTick.addListener(_handlePositionChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PianoRoll oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentTick != widget.currentTick) {
+      oldWidget.currentTick.removeListener(_handlePositionChanged);
+      widget.currentTick.addListener(_handlePositionChanged);
+      _cursorController.stop();
+      _smoothTick.value = widget.currentTick.value.toDouble();
+      _lastPositionUpdate = DateTime.now();
+    }
+  }
+
+  void _updateSmoothedTick() {
+    _smoothTick.value = _cursorAnimation.value;
+  }
+
+  void _handlePositionChanged() {
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastPositionUpdate);
+    _lastPositionUpdate = now;
+    _cursorController
+      ..stop()
+      ..duration = Duration(
+        milliseconds: elapsed.inMilliseconds.clamp(24, 120).toInt(),
+      );
+    _cursorAnimation = Tween<double>(
+      begin: _smoothTick.value,
+      end: widget.currentTick.value.toDouble(),
+    ).animate(_cursorController);
+    _cursorController.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    widget.currentTick.removeListener(_handlePositionChanged);
+    _cursorController.removeListener(_updateSmoothedTick);
+    _cursorController.dispose();
+    _smoothTick.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
       key: const Key('piano_roll_view'),
       color: const Color(0xFF090A0E),
-      child: CustomPaint(
-        painter: _PianoRollPainter(
-          notes: notes,
-          ticksPerBeat: ticksPerBeat,
-          currentTick: currentTick,
-          lowPitch: lowPitch,
-          highPitch: highPitch,
-        ),
-        child: const SizedBox.expand(),
+      child: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                RepaintBoundary(
+                  child: CustomPaint(
+                    painter: _PianoGridPainter(
+                      lowPitch: widget.lowPitch,
+                      highPitch: widget.highPitch,
+                    ),
+                  ),
+                ),
+                RepaintBoundary(
+                  child: CustomPaint(
+                    painter: _PianoNotesPainter(
+                      timeline: _timeline,
+                      currentTick: _smoothTick,
+                      lowPitch: widget.lowPitch,
+                      highPitch: widget.highPitch,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 72,
+            child: _PianoKeyboard(
+              timeline: _timeline,
+              currentTick: widget.currentTick,
+              lowPitch: widget.lowPitch,
+              highPitch: widget.highPitch,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _PianoRollPainter extends CustomPainter {
-  const _PianoRollPainter({
-    required this.notes,
-    required this.ticksPerBeat,
-    required this.currentTick,
+class _PianoRollTimeline {
+  _PianoRollTimeline(this.notes, this.ticksPerBeat)
+      : visibleTicks = ticksPerBeat * 8 {
+    final mutableBuckets = <int, List<int>>{};
+    for (var index = 0; index < notes.length; index++) {
+      final note = notes[index];
+      if (note.endTick - note.startTick > visibleTicks) {
+        _longNotes.add(index);
+        continue;
+      }
+      final firstBucket = note.startTick ~/ ticksPerBeat;
+      final lastBucket = note.endTick ~/ ticksPerBeat;
+      for (var bucket = firstBucket; bucket <= lastBucket; bucket++) {
+        mutableBuckets.putIfAbsent(bucket, () => <int>[]).add(index);
+      }
+    }
+    _buckets = mutableBuckets;
+  }
+
+  final List<MidiNote> notes;
+  final int ticksPerBeat;
+  final int visibleTicks;
+  late final Map<int, List<int>> _buckets;
+  final List<int> _longNotes = [];
+
+  Iterable<int> visibleNoteIndices(int currentTick) sync* {
+    final indices = <int>{};
+    final firstBucket = math.max(0, currentTick) ~/ ticksPerBeat;
+    final lastBucket = (currentTick + visibleTicks) ~/ ticksPerBeat;
+    for (var bucket = firstBucket; bucket <= lastBucket; bucket++) {
+      indices.addAll(_buckets[bucket] ?? const <int>[]);
+    }
+    indices.addAll(_longNotes);
+
+    final ordered = indices.toList()..sort();
+    for (final index in ordered) {
+      final note = notes[index];
+      if (note.endTick >= currentTick &&
+          note.startTick <= currentTick + visibleTicks) {
+        yield index;
+      }
+    }
+  }
+
+  Set<int> activePitches(int currentTick) => {
+        for (final index in visibleNoteIndices(currentTick))
+          if (notes[index].startTick <= currentTick &&
+              notes[index].endTick > currentTick)
+            notes[index].pitch,
+      };
+}
+
+class _PianoGridPainter extends CustomPainter {
+  const _PianoGridPainter({
     required this.lowPitch,
     required this.highPitch,
   });
 
-  final List<MidiNote> notes;
-  final int ticksPerBeat;
-  final int currentTick;
   final int lowPitch;
   final int highPitch;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final hitLine = size.height * 0.9;
+    final pitchWidth = size.width / (highPitch - lowPitch);
+    final gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.12)
+      ..strokeWidth = 1;
+
+    for (var pitch = lowPitch; pitch <= highPitch; pitch++) {
+      final x = (pitch - lowPitch) * pitchWidth;
+      canvas.drawLine(Offset(x, 0), Offset(x, hitLine), gridPaint);
+    }
+    for (var beat = 0; beat <= 8; beat++) {
+      final y = hitLine - (beat / 8) * hitLine;
+      gridPaint.strokeWidth = beat % 4 == 0 ? 1.5 : 0.7;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+    canvas.drawLine(
+      Offset(0, hitLine),
+      Offset(size.width, hitLine),
+      Paint()
+        ..color = Colors.pinkAccent
+        ..strokeWidth = 2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_PianoGridPainter oldDelegate) =>
+      oldDelegate.lowPitch != lowPitch || oldDelegate.highPitch != highPitch;
+}
+
+class _PianoNotesPainter extends CustomPainter {
+  _PianoNotesPainter({
+    required this.timeline,
+    required this.currentTick,
+    required this.lowPitch,
+    required this.highPitch,
+  }) : super(repaint: currentTick);
+
+  final _PianoRollTimeline timeline;
+  final ValueListenable<double> currentTick;
+  final int lowPitch;
+  final int highPitch;
+  final Map<int, TextPainter> _labels = {};
 
   static const _colors = [
     Color(0xFF73B7FF),
@@ -711,33 +874,16 @@ class _PianoRollPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final pitchWidth = size.width / (highPitch - lowPitch);
     final hitLine = size.height * 0.9;
-    final visibleTicks = ticksPerBeat * 8;
-    final gridPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.12)
-      ..strokeWidth = 1;
-
-    for (var pitch = lowPitch; pitch <= highPitch; pitch++) {
-      final x = (pitch - lowPitch) * pitchWidth;
-      canvas.drawLine(Offset(x, 0), Offset(x, hitLine), gridPaint);
-    }
-    for (var beat = 0; beat <= 8; beat++) {
-      final y = hitLine - (beat / 8) * hitLine;
-      canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        gridPaint..strokeWidth = beat % 4 == 0 ? 1.5 : 0.7,
-      );
-    }
-
+    final visibleTicks = timeline.visibleTicks;
+    final tick = currentTick.value;
     final notePaint = Paint()..style = PaintingStyle.fill;
-    for (final note in notes) {
-      if (note.pitch < lowPitch ||
-          note.pitch >= highPitch ||
-          note.endTick < currentTick ||
-          note.startTick > currentTick + visibleTicks) {
-        continue;
-      }
-      final startOffset = note.startTick - currentTick;
+    final radius = Radius.circular(pitchWidth.clamp(2, 8).toDouble());
+
+    for (final index in timeline.visibleNoteIndices(tick.floor())) {
+      final note = timeline.notes[index];
+      if (note.pitch < lowPitch || note.pitch >= highPitch) continue;
+
+      final startOffset = note.startTick - tick;
       final duration = note.endTick - note.startTick;
       final bottom = hitLine - (startOffset / visibleTicks) * hitLine;
       final top = bottom - (duration / visibleTicks) * hitLine;
@@ -751,44 +897,34 @@ class _PianoRollPainter extends CustomPainter {
 
       notePaint.color = _colors[note.channel % _colors.length]
           .withValues(alpha: 0.55 + note.velocity / 280);
-      final radius = Radius.circular(pitchWidth.clamp(2, 8).toDouble());
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, radius),
-        notePaint,
-      );
+      canvas.drawRRect(RRect.fromRectAndRadius(rect, radius), notePaint);
       if (rect.height > 22 && rect.width > 24) {
-        final label = TextPainter(
-          text: TextSpan(
-            text: _noteName(note.pitch),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
+        final label = _labels.putIfAbsent(
+          index,
+          () => TextPainter(
+            text: TextSpan(
+              text: _noteName(note.pitch),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: rect.width - 4);
+            textDirection: TextDirection.ltr,
+          )..layout(maxWidth: rect.width - 4),
+        );
         label.paint(
           canvas,
           Offset(rect.left + 2, rect.top + rect.height - label.height - 2),
         );
       }
     }
-
-    final hitPaint = Paint()
-      ..color = Colors.pinkAccent
-      ..strokeWidth = 2;
-    canvas.drawLine(
-      Offset(0, hitLine),
-      Offset(size.width, hitLine),
-      hitPaint,
-    );
   }
 
   @override
-  bool shouldRepaint(_PianoRollPainter oldDelegate) =>
+  bool shouldRepaint(_PianoNotesPainter oldDelegate) =>
+      oldDelegate.timeline != timeline ||
       oldDelegate.currentTick != currentTick ||
-      oldDelegate.notes != notes ||
       oldDelegate.lowPitch != lowPitch ||
       oldDelegate.highPitch != highPitch;
 
@@ -813,22 +949,25 @@ class _PianoRollPainter extends CustomPainter {
 
 class _PianoKeyboard extends StatelessWidget {
   const _PianoKeyboard({
+    required this.timeline,
+    required this.currentTick,
     required this.lowPitch,
     required this.highPitch,
-    required this.activePitches,
   });
 
+  final _PianoRollTimeline timeline;
+  final ValueListenable<int> currentTick;
   final int lowPitch;
   final int highPitch;
-  final Set<int> activePitches;
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
       painter: _PianoKeyboardPainter(
+        timeline: timeline,
+        currentTick: currentTick,
         lowPitch: lowPitch,
         highPitch: highPitch,
-        activePitches: activePitches,
       ),
       child: const SizedBox.expand(),
     );
@@ -836,25 +975,30 @@ class _PianoKeyboard extends StatelessWidget {
 }
 
 class _PianoKeyboardPainter extends CustomPainter {
-  const _PianoKeyboardPainter({
+  _PianoKeyboardPainter({
+    required this.timeline,
+    required this.currentTick,
     required this.lowPitch,
     required this.highPitch,
-    required this.activePitches,
-  });
+  }) : super(repaint: currentTick);
 
+  final _PianoRollTimeline timeline;
+  final ValueListenable<int> currentTick;
   final int lowPitch;
   final int highPitch;
-  final Set<int> activePitches;
 
   static const _blackKeyClasses = {1, 3, 6, 8, 10};
   static const _whiteKeyClasses = {0, 2, 4, 5, 7, 9, 11};
+  late final List<int> _whitePitches = [
+    for (var pitch = lowPitch; pitch < highPitch; pitch++)
+      if (_whiteKeyClasses.contains(pitch % 12)) pitch,
+  ];
+  final Map<int, TextPainter> _labels = {};
 
   @override
   void paint(Canvas canvas, Size size) {
-    final whitePitches = [
-      for (var pitch = lowPitch; pitch < highPitch; pitch++)
-        if (_whiteKeyClasses.contains(pitch % 12)) pitch,
-    ];
+    final activePitches = timeline.activePitches(currentTick.value);
+    final whitePitches = _whitePitches;
     if (whitePitches.isEmpty) return;
 
     final whiteWidth = size.width / whitePitches.length;
@@ -877,13 +1021,16 @@ class _PianoKeyboardPainter extends CustomPainter {
           ..strokeWidth = 1,
       );
       if (pitch % 12 == 0 && whiteWidth > 13) {
-        final label = TextPainter(
-          text: TextSpan(
-            text: 'C${pitch ~/ 12 - 1}',
-            style: const TextStyle(color: Colors.black54, fontSize: 9),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: whiteWidth - 2);
+        final label = _labels.putIfAbsent(
+          pitch,
+          () => TextPainter(
+            text: TextSpan(
+              text: 'C${pitch ~/ 12 - 1}',
+              style: const TextStyle(color: Colors.black54, fontSize: 9),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout(maxWidth: whiteWidth - 2),
+        );
         label.paint(
           canvas,
           Offset(left + 2, size.height - label.height - 3),
@@ -914,7 +1061,7 @@ class _PianoKeyboardPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_PianoKeyboardPainter oldDelegate) =>
-      oldDelegate.activePitches != activePitches ||
+      oldDelegate.timeline != timeline ||
       oldDelegate.lowPitch != lowPitch ||
       oldDelegate.highPitch != highPitch;
 }
