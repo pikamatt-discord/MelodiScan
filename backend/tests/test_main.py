@@ -313,6 +313,7 @@ def test_omr_engine_passes_pdf_document_to_audiveris(tmp_path, monkeypatch):
     assert result == str(output_path)
     assert calls[0][-1] == str(pdf_path)
     assert "-batch" in calls[0]
+    assert "-transcribe" in calls[0]
     assert "-export" in calls[0]
 
 

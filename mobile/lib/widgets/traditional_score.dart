@@ -21,7 +21,8 @@ class TraditionalScore extends StatefulWidget {
 
 class _TraditionalScoreState extends State<TraditionalScore>
     with SingleTickerProviderStateMixin {
-  static const _systemHeight = 176.0;
+  static const _singleStaffHeight = 176.0;
+  static const _grandStaffHeight = 176.0;
   final _scrollController = ScrollController();
   late final AnimationController _cursorController;
   late final ValueNotifier<double> _smoothTick;
@@ -29,6 +30,9 @@ class _TraditionalScoreState extends State<TraditionalScore>
   late DateTime _lastPositionUpdate;
   int _lastScrolledSystem = 0;
   int _measuresPerSystem = 1;
+
+  double get _systemHeight =>
+      widget.score.hasGrandStaff ? _grandStaffHeight : _singleStaffHeight;
 
   int _measureIndexAtTick() {
     if (widget.score.measures.isEmpty) return 0;
@@ -148,6 +152,7 @@ class _TraditionalScoreState extends State<TraditionalScore>
                       painter: _ScoreSystemPainter(
                         measures: measures,
                         firstMeasureIndex: start,
+                        isGrandStaff: widget.score.hasGrandStaff,
                         textDirection: Directionality.of(context),
                       ),
                       child: const SizedBox.expand(),
@@ -159,6 +164,7 @@ class _TraditionalScoreState extends State<TraditionalScore>
                         measures: measures,
                         firstMeasureIndex: start,
                         currentTick: _smoothTick,
+                        isGrandStaff: widget.score.hasGrandStaff,
                       ),
                       child: const SizedBox.expand(),
                     ),
@@ -177,18 +183,19 @@ class _ScoreSystemPainter extends CustomPainter {
   _ScoreSystemPainter({
     required this.measures,
     required this.firstMeasureIndex,
+    required this.isGrandStaff,
     required this.textDirection,
   });
 
   final List<ScoreMeasure> measures;
   final int firstMeasureIndex;
+  final bool isGrandStaff;
   final TextDirection textDirection;
 
   static const _left = 10.0;
   static const _right = 10.0;
   static const _staffTop = 48.0;
   static const _lineGap = 11.0;
-  static const _bottomLine = _staffTop + 4 * _lineGap;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -197,24 +204,50 @@ class _ScoreSystemPainter extends CustomPainter {
       ..strokeWidth = 1.15;
     final staffWidth = size.width - _left - _right;
     final measureWidth = staffWidth / measures.length;
+    final tieStarts = <(int, String, int, int), (double, double)>{};
 
-    for (var line = 0; line < 5; line++) {
-      final y = _staffTop + line * _lineGap;
-      canvas.drawLine(Offset(_left, y), Offset(size.width - _right, y), ink);
+    for (var staff = 1; staff <= (isGrandStaff ? 2 : 1); staff++) {
+      final top = _staffTopFor(staff);
+      for (var line = 0; line < 5; line++) {
+        final y = top + line * _lineGap;
+        canvas.drawLine(Offset(_left, y), Offset(size.width - _right, y), ink);
+      }
+    }
+
+    if (isGrandStaff) {
+      final upperTop = _staffTopFor(1);
+      final lowerBottom = _staffTopFor(2) + 4 * _lineGap;
+      final bracket = Paint()
+        ..color = const Color(0xFF171717)
+        ..strokeWidth = 1.6;
+      canvas.drawLine(Offset(4, upperTop), Offset(4, lowerBottom), bracket);
+      canvas.drawLine(Offset(4, upperTop), Offset(_left, upperTop), bracket);
+      canvas.drawLine(
+          Offset(4, lowerBottom), Offset(_left, lowerBottom), bracket);
     }
 
     for (var index = 0; index < measures.length; index++) {
       final measure = measures[index];
       final measureLeft = _left + index * measureWidth;
       final measureRight = measureLeft + measureWidth;
-      final isFirst = firstMeasureIndex + index == 0;
+      final isSystemStart = index == 0;
 
       if (index > 0) {
-        canvas.drawLine(
-          Offset(measureLeft, _staffTop),
-          Offset(measureLeft, _bottomLine),
-          ink,
-        );
+        for (var staff = 1; staff <= (isGrandStaff ? 2 : 1); staff++) {
+          final top = _staffTopFor(staff);
+          canvas.drawLine(
+            Offset(measureLeft, top),
+            Offset(measureLeft, top + 4 * _lineGap),
+            ink,
+          );
+        }
+        if (isGrandStaff) {
+          canvas.drawLine(
+            Offset(measureLeft, _staffTopFor(1) + 4 * _lineGap),
+            Offset(measureLeft, _staffTopFor(2)),
+            ink,
+          );
+        }
       }
 
       _drawText(
@@ -226,8 +259,8 @@ class _ScoreSystemPainter extends CustomPainter {
       );
 
       final previousMeasure = index > 0 ? measures[index - 1] : null;
-      final clefChanged =
-          previousMeasure != null && previousMeasure.clef != measure.clef;
+      final clefChanged = previousMeasure != null &&
+          _staffClefsChanged(previousMeasure, measure);
       final keyChanged =
           previousMeasure != null && previousMeasure.fifths != measure.fifths;
       final timeChanged = previousMeasure != null &&
@@ -241,14 +274,14 @@ class _ScoreSystemPainter extends CustomPainter {
         timeChanged: timeChanged,
       );
       final contentLeft = measureLeft +
-          (isFirst
+          (isSystemStart
               ? _headerWidth(measure)
               : hasSignatureChange
                   ? signatureChangeWidth
                   : 18);
       final contentRight = measureRight - 8;
-      final accidentalState = <String, int>{};
-      if (isFirst) {
+      final accidentalState = <int, Map<String, int>>{};
+      if (isSystemStart) {
         _drawHeader(canvas, measure, measureLeft);
       } else if (hasSignatureChange) {
         _drawChangedSignatures(
@@ -261,32 +294,132 @@ class _ScoreSystemPainter extends CustomPainter {
         );
       }
 
+      final tupletNotesRemaining = <(int, String, int, int), int>{};
       for (final note in measure.notes) {
         final measureTicks = math.max(1, measure.endTick - measure.startTick);
         final progress = (note.startTick - measure.startTick) / measureTicks;
         final x = contentLeft + progress * (contentRight - contentLeft);
+        final noteClef = measure.clefForStaff(note.staff);
+        final staffTop = _staffTopFor(note.staff);
+        final noteY = note.isRest
+            ? staffTop + _lineGap
+            : _noteY(note, noteClef, staffTop);
+        final tieKey = (note.staff, note.step, note.octave, note.alter);
+        if (note.ties.contains('stop')) {
+          final tieStart = tieStarts.remove(tieKey);
+          if (tieStart != null) {
+            _drawTie(canvas, tieStart, (x, noteY));
+          }
+        }
+        if (note.ties.contains('start')) {
+          tieStarts[tieKey] = (x, noteY);
+        }
+        final actualNotes = note.actualNotes;
+        final normalNotes = note.normalNotes;
+        if (actualNotes != null &&
+            normalNotes != null &&
+            actualNotes > 1 &&
+            actualNotes != normalNotes) {
+          final group = (note.staff, note.voice, actualNotes, normalNotes);
+          final remaining = tupletNotesRemaining[group] ?? 0;
+          if (remaining == 0) {
+            _drawText(
+              canvas,
+              '$actualNotes:$normalNotes',
+              Offset(x, staffTop - 13),
+              8,
+              const Color(0xFF555555),
+              centered: true,
+            );
+          }
+          tupletNotesRemaining[group] =
+              (remaining == 0 ? actualNotes : remaining) - 1;
+        }
         _drawNote(
           canvas,
           note,
           x,
-          measure.clef,
+          noteClef,
           measure.fifths,
-          accidentalState,
+          accidentalState.putIfAbsent(note.staff, () => {}),
           false,
+          staffTop,
         );
       }
     }
 
     final endX = _left + measures.length * measureWidth;
-    canvas.drawLine(
-      Offset(endX, _staffTop),
-      Offset(endX, _bottomLine),
-      ink..strokeWidth = 1.8,
+    ink.strokeWidth = 1.8;
+    for (var staff = 1; staff <= (isGrandStaff ? 2 : 1); staff++) {
+      final top = _staffTopFor(staff);
+      canvas.drawLine(Offset(endX, top), Offset(endX, top + 4 * _lineGap), ink);
+    }
+    if (isGrandStaff) {
+      canvas.drawLine(
+        Offset(endX, _staffTopFor(1) + 4 * _lineGap),
+        Offset(endX, _staffTopFor(2)),
+        ink,
+      );
+    }
+  }
+
+  double _staffTopFor(int staff) => !isGrandStaff
+      ? _staffTop
+      : staff == 2
+          ? 108
+          : 34;
+
+  double _noteY(ScoreNote note, ScoreClef clef, double staffTop) =>
+      staffTop +
+      4 * _lineGap -
+      (_diatonicStep(note.step, note.octave) - _bottomStep(clef)) *
+          (_lineGap / 2);
+
+  void _drawTie(
+    Canvas canvas,
+    (double, double) start,
+    (double, double) end,
+  ) {
+    final fromX = start.$1 + 6;
+    final toX = end.$1 - 6;
+    if (toX <= fromX) return;
+    final y = (start.$2 + end.$2) / 2 + 5;
+    final curve = math.min(10.0, math.max(3.0, (toX - fromX) * 0.1));
+    final path = Path()
+      ..moveTo(fromX, start.$2 + 4)
+      ..cubicTo(
+        fromX + (toX - fromX) / 3,
+        y + curve,
+        fromX + 2 * (toX - fromX) / 3,
+        y + curve,
+        toX,
+        end.$2 + 4,
+      );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = const Color(0xFF171717)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
     );
   }
 
+  int _staffCount(ScoreMeasure measure) => math.max(
+        measure.staves,
+        measure.notes.fold(1, (count, note) => math.max(count, note.staff)),
+      );
+
+  bool _staffClefsChanged(ScoreMeasure previous, ScoreMeasure current) {
+    for (var staff = 1; staff <= _staffCount(current); staff++) {
+      if (previous.clefForStaff(staff) != current.clefForStaff(staff)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   double _headerWidth(ScoreMeasure measure) =>
-      47 + math.min(7, measure.fifths.abs()) * 7.0;
+      (isGrandStaff ? 67 : 47) + math.min(7, measure.fifths.abs()) * 7.0;
 
   double _signatureChangeWidth(
     ScoreMeasure measure, {
@@ -300,13 +433,19 @@ class _ScoreSystemPainter extends CustomPainter {
       (timeChanged ? 18 : 0);
 
   void _drawHeader(Canvas canvas, ScoreMeasure measure, double x) {
-    _drawClef(canvas, measure.clef, x + 1);
-    _drawKeySignature(canvas, measure, x + 24);
-    _drawTimeSignature(
-      canvas,
-      measure,
-      x + 27 + math.min(7, measure.fifths.abs()) * 7,
-    );
+    for (var staff = 1; staff <= _staffCount(measure); staff++) {
+      final top = _staffTopFor(staff);
+      final clefX = x + (isGrandStaff ? 12 : 1);
+      final keyX = x + (isGrandStaff ? 35 : 24);
+      _drawClef(canvas, measure.clefForStaff(staff), clefX, top);
+      _drawKeySignature(canvas, measure, keyX, top, staff);
+      _drawTimeSignature(
+        canvas,
+        measure,
+        x + (isGrandStaff ? 38 : 27) + math.min(7, measure.fifths.abs()) * 7,
+        top,
+      );
+    }
   }
 
   void _drawChangedSignatures(
@@ -317,36 +456,55 @@ class _ScoreSystemPainter extends CustomPainter {
     required bool keyChanged,
     required bool timeChanged,
   }) {
-    var cursor = x + 4;
-    if (clefChanged) {
-      _drawClef(canvas, measure.clef, cursor);
-      cursor += 25;
-    }
-    if (keyChanged) {
-      _drawKeySignature(canvas, measure, cursor);
-      cursor += math.min(7, measure.fifths.abs()) * 7.0;
-    }
-    if (timeChanged) {
-      _drawTimeSignature(canvas, measure, cursor + 7);
+    for (var staff = 1; staff <= _staffCount(measure); staff++) {
+      var cursor = x + 4;
+      final top = _staffTopFor(staff);
+      if (clefChanged) {
+        _drawClef(canvas, measure.clefForStaff(staff), cursor, top);
+        cursor += 25;
+      }
+      if (keyChanged) {
+        _drawKeySignature(canvas, measure, cursor, top, staff);
+        cursor += math.min(7, measure.fifths.abs()) * 7.0;
+      }
+      if (timeChanged) {
+        _drawTimeSignature(canvas, measure, cursor + 7, top);
+      }
     }
   }
 
-  void _drawClef(Canvas canvas, ScoreClef clef, double x) {
+  void _drawClef(
+    Canvas canvas,
+    ScoreClef clef,
+    double x,
+    double staffTop,
+  ) {
     final symbol = switch (clef) {
       ScoreClef.bass => '𝄢',
       ScoreClef.alto || ScoreClef.tenor => '𝄡',
       ScoreClef.percussion => '𝄥',
       ScoreClef.treble => '𝄞',
     };
-    _drawText(canvas, symbol, Offset(x, _staffTop - 13), 37, Colors.black);
+    _drawText(canvas, symbol, Offset(x, staffTop - 13), 37, Colors.black);
   }
 
-  void _drawKeySignature(Canvas canvas, ScoreMeasure measure, double x) {
+  void _drawKeySignature(
+    Canvas canvas,
+    ScoreMeasure measure,
+    double x,
+    double staffTop,
+    int staff,
+  ) {
     final keyGlyph = measure.fifths > 0 ? '♯' : '♭';
     final keyCount = math.min(7, measure.fifths.abs());
-    final keySteps = _keySignatureSteps(measure.clef, measure.fifths);
+    final keySteps =
+        _keySignatureSteps(measure.clefForStaff(staff), measure.fifths);
     for (var index = 0; index < keyCount; index++) {
-      final y = _yForStep(keySteps[index], measure.clef);
+      final y = _yForStep(
+        keySteps[index],
+        measure.clefForStaff(staff),
+        staffTop,
+      );
       _drawText(
         canvas,
         keyGlyph,
@@ -357,11 +515,16 @@ class _ScoreSystemPainter extends CustomPainter {
     }
   }
 
-  void _drawTimeSignature(Canvas canvas, ScoreMeasure measure, double x) {
+  void _drawTimeSignature(
+    Canvas canvas,
+    ScoreMeasure measure,
+    double x,
+    double staffTop,
+  ) {
     _drawText(
       canvas,
       '${measure.beats}\n${measure.beatType}',
-      Offset(x, _staffTop + 3),
+      Offset(x, staffTop + 3),
       11,
       Colors.black,
       centered: true,
@@ -376,6 +539,7 @@ class _ScoreSystemPainter extends CustomPainter {
     int fifths,
     Map<String, int> accidentalState,
     bool highlighted,
+    double staffTop,
   ) {
     final color =
         highlighted ? const Color(0xFFE53935) : const Color(0xFF171717);
@@ -394,16 +558,23 @@ class _ScoreSystemPainter extends CustomPainter {
       _drawText(
         canvas,
         restGlyph,
-        Offset(x - 7, _staffTop + _lineGap),
+        Offset(x - 7, staffTop + _lineGap),
         22,
         color,
       );
+      for (var dot = 0; dot < note.dots; dot++) {
+        canvas.drawCircle(
+          Offset(x + 7 + dot * 5, staffTop + _lineGap + 2),
+          1.5,
+          notePaint,
+        );
+      }
       return;
     }
 
     final step = _diatonicStep(note.step, note.octave);
     final staffPosition = step - _bottomStep(clef);
-    final y = _yForStep(step, clef);
+    final y = _yForStep(step, clef, staffTop);
     final keyAlter = _keyAlter(note.step, fifths);
     final accidentalKey = '${note.step}${note.octave}';
     final previousAlter = accidentalState[accidentalKey] ?? keyAlter;
@@ -431,7 +602,7 @@ class _ScoreSystemPainter extends CustomPainter {
       for (var ledger = firstLedger;
           staffPosition < 0 ? ledger >= lastLedger : ledger <= lastLedger;
           ledger += staffPosition < 0 ? -2 : 2) {
-        final ledgerY = _yForStep(_bottomStep(clef) + ledger, clef);
+        final ledgerY = _yForStep(_bottomStep(clef) + ledger, clef, staffTop);
         canvas.drawLine(
             Offset(x - 8, ledgerY), Offset(x + 8, ledgerY), notePaint);
       }
@@ -551,8 +722,12 @@ class _ScoreSystemPainter extends CustomPainter {
     return octave * 7 + (steps[step] ?? 0);
   }
 
-  double _yForStep(int step, [ScoreClef clef = ScoreClef.treble]) =>
-      _bottomLine - (step - _bottomStep(clef)) * (_lineGap / 2);
+  double _yForStep(
+    int step,
+    ScoreClef clef,
+    double staffTop,
+  ) =>
+      staffTop + 4 * _lineGap - (step - _bottomStep(clef)) * (_lineGap / 2);
 
   int _keyAlter(String step, int fifths) {
     const sharpOrder = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
@@ -591,17 +766,18 @@ class _ScorePlaybackPainter extends CustomPainter {
     required this.measures,
     required this.firstMeasureIndex,
     required this.currentTick,
+    required this.isGrandStaff,
   }) : super(repaint: currentTick);
 
   final List<ScoreMeasure> measures;
   final int firstMeasureIndex;
   final ValueListenable<double> currentTick;
+  final bool isGrandStaff;
 
   static const _left = 10.0;
   static const _right = 10.0;
   static const _staffTop = 48.0;
   static const _lineGap = 11.0;
-  static const _bottomLine = _staffTop + 4 * _lineGap;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -615,9 +791,10 @@ class _ScorePlaybackPainter extends CustomPainter {
 
       final measureLeft = _left + index * measureWidth;
       final measureRight = measureLeft + measureWidth;
-      final isFirst = firstMeasureIndex + index == 0;
+      final isSystemStart = index == 0;
       final previous = index > 0 ? measures[index - 1] : null;
-      final clefChanged = previous != null && previous.clef != measure.clef;
+      final clefChanged =
+          previous != null && _staffClefsChanged(previous, measure);
       final keyChanged = previous != null && previous.fifths != measure.fifths;
       final timeChanged = previous != null &&
           (previous.beats != measure.beats ||
@@ -627,20 +804,23 @@ class _ScorePlaybackPainter extends CustomPainter {
           (keyChanged ? math.min(7, measure.fifths.abs()) * 7.0 : 0) +
           (timeChanged ? 18 : 0);
       final contentLeft = measureLeft +
-          (isFirst
-              ? 47 + math.min(7, measure.fifths.abs()) * 7.0
+          (isSystemStart
+              ? (isGrandStaff ? 67 : 47) +
+                  math.min(7, measure.fifths.abs()) * 7.0
               : clefChanged || keyChanged || timeChanged
                   ? signatureChangeWidth
                   : 18);
       final contentRight = measureRight - 8;
       final activeHighlight = Paint()
         ..color = const Color(0xFFFFD54F).withValues(alpha: 0.10);
+      final upperTop = _staffTopFor(1);
+      final lowerBottom = _staffTopFor(isGrandStaff ? 2 : 1) + 4 * _lineGap;
       canvas.drawRect(
         Rect.fromLTRB(
           measureLeft,
-          _staffTop - 15,
+          upperTop - 15,
           measureRight,
-          _bottomLine + 16,
+          lowerBottom + 16,
         ),
         activeHighlight,
       );
@@ -653,8 +833,8 @@ class _ScorePlaybackPainter extends CustomPainter {
         ..color = const Color(0xFFE53935)
         ..strokeWidth = 1.5;
       canvas.drawLine(
-        Offset(x, _staffTop - 12),
-        Offset(x, _bottomLine + 12),
+        Offset(x, upperTop - 12),
+        Offset(x, lowerBottom + 12),
         playhead,
       );
 
@@ -666,8 +846,11 @@ class _ScorePlaybackPainter extends CustomPainter {
             (note.startTick - measure.startTick) / measureTicks;
         final noteX = contentLeft + noteProgress * (contentRight - contentLeft);
         final step = _diatonicStep(note.step, note.octave);
-        final y =
-            _bottomLine - (step - _bottomStep(measure.clef)) * (_lineGap / 2);
+        final staffTop = _staffTopFor(note.staff);
+        final clef = measure.clefForStaff(note.staff);
+        final y = staffTop +
+            4 * _lineGap -
+            (step - _bottomStep(clef)) * (_lineGap / 2);
         final noteHead = Paint()
           ..color = const Color(0xFFE53935)
           ..style = PaintingStyle.fill;
@@ -682,6 +865,23 @@ class _ScorePlaybackPainter extends CustomPainter {
       }
       return;
     }
+  }
+
+  double _staffTopFor(int staff) => !isGrandStaff
+      ? _staffTop
+      : staff == 2
+          ? 108
+          : 34;
+
+  bool _staffClefsChanged(ScoreMeasure previous, ScoreMeasure current) {
+    for (var staff = 1;
+        staff <= math.max(previous.staves, current.staves);
+        staff++) {
+      if (previous.clefForStaff(staff) != current.clefForStaff(staff)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   int _bottomStep(ScoreClef clef) => switch (clef) {

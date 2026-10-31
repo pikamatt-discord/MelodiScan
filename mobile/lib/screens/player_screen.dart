@@ -36,6 +36,101 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
+class _MeasureJumpControl extends StatefulWidget {
+  const _MeasureJumpControl({
+    required this.currentMeasure,
+    required this.totalMeasures,
+    required this.enabled,
+    required this.onJump,
+    super.key,
+  });
+
+  final int currentMeasure;
+  final int totalMeasures;
+  final bool enabled;
+  final Future<void> Function(int measure) onJump;
+
+  @override
+  State<_MeasureJumpControl> createState() => _MeasureJumpControlState();
+}
+
+class _MeasureJumpControlState extends State<_MeasureJumpControl> {
+  late final TextEditingController _controller =
+      TextEditingController(text: '${widget.currentMeasure}');
+  final FocusNode _focusNode = FocusNode();
+  String? _errorText;
+
+  @override
+  void didUpdateWidget(covariant _MeasureJumpControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentMeasure != widget.currentMeasure &&
+        !_focusNode.hasFocus) {
+      _controller.text = '${widget.currentMeasure}';
+      _errorText = null;
+    }
+  }
+
+  Future<void> _jump() async {
+    final measure = int.tryParse(_controller.text.trim());
+    if (measure == null || measure < 1 || measure > widget.totalMeasures) {
+      setState(() {
+        _errorText = 'Choisissez une mesure de 1 à ${widget.totalMeasures}.';
+      });
+      return;
+    }
+
+    setState(() => _errorText = null);
+    _focusNode.unfocus();
+    await widget.onJump(measure);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 184,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const Key('measure_jump_field'),
+              controller: _controller,
+              focusNode: _focusNode,
+              enabled: widget.enabled,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.go,
+              onSubmitted: (_) => _jump(),
+              style: Theme.of(context).textTheme.labelMedium,
+              decoration: InputDecoration(
+                labelText: 'Mesure',
+                isDense: true,
+                errorText: _errorText,
+                suffixText: '/ ${widget.totalMeasures}',
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+          IconButton(
+            key: const Key('measure_jump_button'),
+            onPressed: widget.enabled ? _jump : null,
+            tooltip: 'Aller à la mesure',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.arrow_forward_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PlayerScreenState extends State<PlayerScreen> {
   bool _isLoading = true;
   Uint8List? _midiBytes;
@@ -52,6 +147,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final ValueNotifier<int> _playbackPosition = ValueNotifier<int>(0);
   bool _isReadingPosition = false;
   Timer? _positionTimer;
+  int? _pendingSeekTick;
   Future<void>? _playbackOperation;
   late final MidiPlayback _playback =
       widget.midiPlayback ?? FlutterMidiPlayback();
@@ -225,6 +321,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
         if (_playbackComplete) {
           await _playback.stop();
         }
+        final pendingSeekTick = _pendingSeekTick;
+        if (pendingSeekTick != null) {
+          await _playback.seek(pendingSeekTick);
+          _pendingSeekTick = null;
+        }
         await _playback.play();
       }
       if (mounted) {
@@ -248,6 +349,68 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  Future<void> _seekToMeasure(int measureIndex) async {
+    if (_isPreparingPlayback ||
+        measureIndex < 0 ||
+        measureIndex >= _score!.measures.length) {
+      return;
+    }
+
+    final operation = _seekToMeasureAction(measureIndex);
+    _playbackOperation = operation;
+    await operation;
+  }
+
+  Future<void> _seekToMeasureAction(int measureIndex) async {
+    final tick = _score!.measures[measureIndex].startTick;
+    final wasPlaying = _isPlaying;
+    var pausedForSeek = false;
+    setState(() {
+      _isPreparingPlayback = true;
+      _playbackError = null;
+    });
+
+    try {
+      _playbackPosition.value = tick;
+      _pendingSeekTick = tick;
+
+      if (_hasPreparedPlayback) {
+        if (wasPlaying) {
+          await _playback.pause();
+          pausedForSeek = true;
+          _positionTimer?.cancel();
+        } else if (_playbackComplete) {
+          await _playback.stop();
+        }
+        await _playback.seek(tick);
+        _pendingSeekTick = null;
+        if (wasPlaying) {
+          await _playback.play();
+          pausedForSeek = false;
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isPlaying = wasPlaying;
+          _playbackComplete = false;
+        });
+        if (wasPlaying) _startPositionPolling();
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          if (pausedForSeek) _isPlaying = false;
+          _playbackError =
+              'Impossible de rejoindre cette mesure : ${error.toString()}';
+        });
+      }
+      if (pausedForSeek) _positionTimer?.cancel();
+    } finally {
+      if (mounted) setState(() => _isPreparingPlayback = false);
+    }
+  }
+
   Future<void> _stopPlayback() async {
     if (_isPreparingPlayback || !_hasPreparedPlayback) return;
     setState(() {
@@ -263,6 +426,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       await _playback.stop();
       _positionTimer?.cancel();
+      _pendingSeekTick = 0;
       if (mounted) {
         setState(() {
           _isPlaying = false;
@@ -509,8 +673,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ? 0
                 : score.measures
                     .indexWhere((measure) => currentTick < measure.endTick);
-            final measureNumber =
-                activeMeasure < 0 ? score.measures.length : activeMeasure + 1;
+            final measureIndex =
+                activeMeasure < 0 ? score.measures.length - 1 : activeMeasure;
+            final measureNumber = measureIndex + 1;
             return Padding(
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
               child: Column(
@@ -526,12 +691,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      Text(
-                        score.measures.isEmpty
-                            ? 'Mesure —'
-                            : 'Mesure $measureNumber / ${score.measures.length}',
-                        style: theme.textTheme.labelSmall
-                            ?.copyWith(color: Colors.white60),
+                      _MeasureJumpControl(
+                        key: const Key('measure_jump_control'),
+                        currentMeasure: measureNumber,
+                        totalMeasures: score.measures.length,
+                        enabled:
+                            !_isPreparingPlayback && score.measures.isNotEmpty,
+                        onJump: (measure) => _seekToMeasure(measure - 1),
                       ),
                       const Spacer(),
                       Text(
@@ -733,7 +899,8 @@ class _PianoRollState extends State<_PianoRoll>
   void _updateSmoothedTick() {
     final elapsed = _clock.elapsed - _anchorTime;
     final tick = (_anchorTick +
-            elapsed.inMicroseconds / Duration.microsecondsPerSecond *
+            elapsed.inMicroseconds /
+                Duration.microsecondsPerSecond *
                 _ticksPerSecond)
         .clamp(0.0, widget.totalTicks.toDouble())
         .toDouble();

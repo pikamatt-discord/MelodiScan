@@ -22,7 +22,15 @@ class OMREngine:
         output_musicxml = os.path.join(output_dir, f"{base_name}.musicxml")
 
         try:
-            cmd = [self.executable, "-batch", "-export", "-output", output_dir, score_path]
+            cmd = [
+                self.executable,
+                "-batch",
+                "-transcribe",
+                "-export",
+                "-output",
+                output_dir,
+                score_path,
+            ]
             if log_path:
                 with open(log_path, "ab") as log_file:
                     res = subprocess.run(

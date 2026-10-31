@@ -15,6 +15,12 @@ class ScoreNote {
     required this.dots,
     required this.isRest,
     required this.accidental,
+    required this.staff,
+    required this.voice,
+    required this.actualNotes,
+    required this.normalNotes,
+    required this.isGrace,
+    required this.ties,
   });
 
   final String step;
@@ -26,6 +32,12 @@ class ScoreNote {
   final int dots;
   final bool isRest;
   final String? accidental;
+  final int staff;
+  final String voice;
+  final int? actualNotes;
+  final int? normalNotes;
+  final bool isGrace;
+  final Set<String> ties;
 }
 
 class ScoreMeasure {
@@ -36,7 +48,8 @@ class ScoreMeasure {
     required this.fifths,
     required this.beats,
     required this.beatType,
-    required this.clef,
+    required this.staves,
+    required this.clefs,
     required this.notes,
   });
 
@@ -46,8 +59,14 @@ class ScoreMeasure {
   final int fifths;
   final int beats;
   final int beatType;
-  final ScoreClef clef;
+  final int staves;
+  final Map<int, ScoreClef> clefs;
   final List<ScoreNote> notes;
+
+  ScoreClef get clef => clefs[1] ?? ScoreClef.treble;
+
+  ScoreClef clefForStaff(int staff) =>
+      clefs[staff] ?? (staff == 2 ? ScoreClef.bass : clef);
 }
 
 class MusicXmlScore {
@@ -59,6 +78,11 @@ class MusicXmlScore {
   final List<ScoreMeasure> measures;
   final int ticksPerBeat;
 
+  bool get hasGrandStaff => measures.any(
+        (measure) =>
+            measure.staves > 1 || measure.notes.any((note) => note.staff > 1),
+      );
+
   factory MusicXmlScore.parse(
     String source, {
     required int ticksPerBeat,
@@ -68,19 +92,23 @@ class MusicXmlScore {
     }
 
     final document = XmlDocument.parse(source);
-    final part = _firstChild(document.rootElement, 'part');
-    if (part == null) {
+    final parts = _children(document.rootElement, 'part').toList();
+    if (parts.isEmpty) {
       throw const FormatException(
         'Le MusicXML ne contient aucune partie musicale.',
       );
     }
+    final part = parts.firstWhere(
+      _hasMultipleStaves,
+      orElse: () => parts.first,
+    );
 
     var divisions = 1.0;
     var fifths = 0;
     var beats = 4;
     var beatType = 4;
-    var clef = ScoreClef.treble;
-    var clefLine = 2;
+    var staves = 1;
+    final clefs = <int, ScoreClef>{1: ScoreClef.treble};
     var elapsedQuarterNotes = 0.0;
     final measures = <ScoreMeasure>[];
 
@@ -118,17 +146,15 @@ class MusicXmlScore {
           if (beatTypeText != null) {
             beatType = int.tryParse(beatTypeText) ?? 0;
           }
-          final clefElement = _firstChild(element, 'clef');
-          if (clefElement != null) {
-            final sign = _text(clefElement, 'sign');
-            clefLine = int.tryParse(_text(clefElement, 'line') ?? '') ?? 2;
-            clef = switch (sign) {
-              'F' => ScoreClef.bass,
-              'C' when clefLine == 3 => ScoreClef.alto,
-              'C' => ScoreClef.tenor,
-              'percussion' => ScoreClef.percussion,
-              _ => ScoreClef.treble,
-            };
+          final stavesText = _text(element, 'staves');
+          if (stavesText != null) {
+            staves = int.tryParse(stavesText) ?? staves;
+          }
+          for (final clefElement in _children(element, 'clef')) {
+            final staff =
+                int.tryParse(clefElement.getAttribute('number') ?? '') ?? 1;
+            clefs[staff] = _parseClef(clefElement);
+            staves = math.max(staves, staff);
           }
         } else if (element.name.local == 'backup' ||
             element.name.local == 'forward') {
@@ -143,6 +169,7 @@ class MusicXmlScore {
           furthestCursor = math.max(furthestCursor, cursor);
         } else if (element.name.local == 'note') {
           final staff = int.tryParse(_text(element, 'staff') ?? '1') ?? 1;
+          staves = math.max(staves, staff);
           final isChord = _firstChild(element, 'chord') != null;
           final noteStart = isChord ? previousNoteStart : cursor;
           final duration =
@@ -152,10 +179,21 @@ class MusicXmlScore {
           final step = pitch == null ? null : _text(pitch, 'step');
           final octave =
               int.tryParse(pitch == null ? '' : _text(pitch, 'octave') ?? '');
-          if (staff == 1 && (rest || (step != null && octave != null))) {
+          if (rest || (step != null && octave != null)) {
             final alter = int.tryParse(
                     pitch == null ? '' : _text(pitch, 'alter') ?? '') ??
                 0;
+            final timeModification = _firstChild(element, 'time-modification');
+            final actualNotes = int.tryParse(
+              timeModification == null
+                  ? ''
+                  : _text(timeModification, 'actual-notes') ?? '',
+            );
+            final normalNotes = int.tryParse(
+              timeModification == null
+                  ? ''
+                  : _text(timeModification, 'normal-notes') ?? '',
+            );
             notes.add(ScoreNote(
               step: step ?? '',
               octave: octave ?? 0,
@@ -171,6 +209,15 @@ class MusicXmlScore {
               dots: _children(element, 'dot').length,
               isRest: rest,
               accidental: _text(element, 'accidental'),
+              staff: staff,
+              voice: _text(element, 'voice') ?? '1',
+              actualNotes: actualNotes,
+              normalNotes: normalNotes,
+              isGrace: _firstChild(element, 'grace') != null,
+              ties: {
+                for (final tie in _children(element, 'tie'))
+                  if (tie.getAttribute('type') case final type?) type,
+              },
             ));
           }
           if (!isChord) {
@@ -201,7 +248,8 @@ class MusicXmlScore {
         fifths: fifths,
         beats: beats,
         beatType: beatType,
-        clef: clef,
+        staves: staves,
+        clefs: Map.unmodifiable(Map<int, ScoreClef>.of(clefs)),
         notes: List.unmodifiable(notes),
       ));
     }
@@ -209,7 +257,7 @@ class MusicXmlScore {
     if (measures.isEmpty ||
         measures.every((measure) => measure.notes.isEmpty)) {
       throw const FormatException(
-        'Le MusicXML ne contient aucune note exploitable sur la première portée.',
+        'Le MusicXML ne contient aucune note exploitable dans la partie principale.',
       );
     }
     return MusicXmlScore(
@@ -217,6 +265,34 @@ class MusicXmlScore {
       ticksPerBeat: ticksPerBeat,
     );
   }
+}
+
+bool _hasMultipleStaves(XmlElement part) {
+  for (final measure in _children(part, 'measure')) {
+    for (final attributes in _children(measure, 'attributes')) {
+      if ((int.tryParse(_text(attributes, 'staves') ?? '') ?? 1) > 1) {
+        return true;
+      }
+    }
+    for (final note in _children(measure, 'note')) {
+      if ((int.tryParse(_text(note, 'staff') ?? '') ?? 1) > 1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+ScoreClef _parseClef(XmlElement clef) {
+  final sign = _text(clef, 'sign');
+  final line = int.tryParse(_text(clef, 'line') ?? '') ?? 2;
+  return switch (sign) {
+    'F' => ScoreClef.bass,
+    'C' when line == 3 => ScoreClef.alto,
+    'C' => ScoreClef.tenor,
+    'percussion' => ScoreClef.percussion,
+    _ => ScoreClef.treble,
+  };
 }
 
 XmlElement? _firstChild(XmlElement parent, String name) {

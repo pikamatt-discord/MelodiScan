@@ -16,6 +16,7 @@ abstract interface class MidiPlayback {
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
+  Future<void> seek(int tick);
   Future<MidiPlaybackPosition> getPosition();
   Future<void> dispose();
 }
@@ -104,6 +105,9 @@ class FlutterMidiPlayback implements MidiPlayback {
 
   @override
   Future<void> stop() => _midi.stopMidi();
+
+  @override
+  Future<void> seek(int tick) => _midi.seekMidi(tick);
 
   @override
   Future<MidiPlaybackPosition> getPosition() async {

@@ -21,6 +21,7 @@ class FakeMidiPlayback implements MidiPlayback {
   int playCount = 0;
   int pauseCount = 0;
   int stopCount = 0;
+  final List<int> seekTicks = [];
   int testNoteCount = 0;
   int disposeCount = 0;
   bool playing = false;
@@ -55,6 +56,12 @@ class FakeMidiPlayback implements MidiPlayback {
   Future<void> stop() async {
     stopCount++;
     playing = false;
+  }
+
+  @override
+  Future<void> seek(int tick) async {
+    seekTicks.add(tick);
+    currentTick = tick;
   }
 
   @override
@@ -118,13 +125,22 @@ const validMusicXml = '''
     <measure number="1">
       <attributes>
         <divisions>24</divisions>
+        <staves>2</staves>
         <key><fifths>-1</fifths></key>
         <time><beats>4</beats><beat-type>4</beat-type></time>
-        <clef><sign>G</sign><line>2</line></clef>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
       </attributes>
       <note>
         <pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch>
         <duration>24</duration><type>quarter</type>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>C</step><octave>3</octave></pitch>
+        <duration>24</duration><type>quarter</type>
+        <staff>2</staff>
       </note>
     </measure>
   </part>
@@ -270,8 +286,22 @@ void main() {
     expect(find.textContaining('Acoustic Grand Piano'), findsOneWidget);
     expect(find.text('Partition'), findsOneWidget);
     expect(find.byKey(const Key('traditional_score_view')), findsOneWidget);
+    expect(find.text('Mesure'), findsOneWidget);
+    expect(find.text('/ 2'), findsOneWidget);
     expect(find.text('Lire'), findsOneWidget);
     expect(find.byKey(const Key('stop_playback')), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('measure_jump_field')), '2');
+    await tester.testTextInput.receiveAction(TextInputAction.go);
+    await tester.pumpAndSettle();
+    expect(playback.seekTicks, isEmpty);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('measure_jump_field')))
+          .controller
+          ?.text,
+      '2',
+    );
 
     await tester.tap(find.text('Piano roll'));
     await tester.pumpAndSettle();
@@ -285,11 +315,19 @@ void main() {
     expect(find.text('Pause'), findsOneWidget);
     expect(playback.preparedBytes, equals(validMidiBytes));
     expect(playback.playCount, 1);
+    expect(playback.seekTicks, [384]);
+
+    await tester.enterText(find.byKey(const Key('measure_jump_field')), '1');
+    await tester.testTextInput.receiveAction(TextInputAction.go);
+    await tester.pumpAndSettle();
+    expect(playback.seekTicks, [384, 0]);
+    expect(playback.playCount, 2);
+    expect(playback.pauseCount, 1);
 
     await tester.tap(find.byKey(const Key('play_pause_fab')));
     await tester.pumpAndSettle();
     expect(find.text('Lire'), findsOneWidget);
-    expect(playback.pauseCount, 1);
+    expect(playback.pauseCount, 2);
 
     await tester.tap(find.byKey(const Key('stop_playback')));
     await tester.pumpAndSettle();
