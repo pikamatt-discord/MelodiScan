@@ -148,6 +148,15 @@ void main() {
     expect(visualization.notes.single.endTick, 96);
   });
 
+  test('Default playback settings preserve the original MIDI bytes', () {
+    final defaults = MidiConfiguration.defaultsFor(validMidiBytes);
+
+    expect(
+      MidiConfiguration.apply(validMidiBytes, defaults),
+      same(validMidiBytes),
+    );
+  });
+
   test('Playback settings rewrite instrument, tempo, and volume', () {
     final configured = MidiConfiguration.apply(
       validMidiBytes,
@@ -264,17 +273,7 @@ void main() {
     await tester.tap(find.byKey(const Key('play_pause_fab')));
     await tester.pumpAndSettle();
     expect(find.text('Pause'), findsOneWidget);
-    expect(playback.preparedBytes, isNot(equals(validMidiBytes)));
-    final preparedMidi =
-        MidiParser().parseMidiFromBuffer(playback.preparedBytes!);
-    expect(
-      preparedMidi.tracks
-          .expand((track) => track)
-          .whereType<ProgramChangeMidiEvent>()
-          .single
-          .programNumber,
-      0,
-    );
+    expect(playback.preparedBytes, equals(validMidiBytes));
     expect(playback.playCount, 1);
 
     await tester.tap(find.byKey(const Key('play_pause_fab')));

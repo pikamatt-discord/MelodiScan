@@ -194,6 +194,13 @@ class MidiConfiguration {
     Uint8List bytes,
     MidiPlayerConfiguration configuration,
   ) {
+    final defaults = defaultsFor(bytes);
+    if (configuration.instrumentProgram == defaults.instrumentProgram &&
+        configuration.tempoBpm == defaults.tempoBpm &&
+        configuration.volumePercent == 100) {
+      return bytes;
+    }
+
     final midi = MidiParser().parseMidiFromBuffer(bytes);
     if (midi.tracks.isEmpty) {
       throw const FormatException('Le fichier MIDI ne contient aucune piste.');
