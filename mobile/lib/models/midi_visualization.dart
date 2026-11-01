@@ -18,15 +18,31 @@ class MidiNote {
   final int channel;
 }
 
+class MidiProgramChange {
+  const MidiProgramChange({
+    required this.tick,
+    required this.channel,
+    required this.program,
+  });
+
+  final int tick;
+  final int channel;
+  final int program;
+}
+
 class MidiVisualization {
   const MidiVisualization({
     required this.notes,
+    required this.programChanges,
+    required this.trackNames,
     required this.ticksPerBeat,
     required this.totalTicks,
     required this.trackCount,
   });
 
   final List<MidiNote> notes;
+  final List<MidiProgramChange> programChanges;
+  final List<String?> trackNames;
   final int ticksPerBeat;
   final int totalTicks;
   final int trackCount;
@@ -53,6 +69,10 @@ class MidiVisualization {
     }
 
     final notes = <MidiNote>[];
+    final programChanges = <MidiProgramChange>[];
+    final namesByTrack = [
+      for (final track in midi.tracks) _trackName(track),
+    ];
     var totalTicks = 0;
 
     for (var currentTrackIndex = 0;
@@ -66,7 +86,13 @@ class MidiVisualization {
         tick += event.deltaTime;
         if (trackIndex != null && currentTrackIndex != trackIndex) continue;
 
-        if (event is NoteOnEvent && event.velocity > 0) {
+        if (event is ProgramChangeMidiEvent) {
+          programChanges.add(MidiProgramChange(
+            tick: tick,
+            channel: event.channel,
+            program: event.programNumber,
+          ));
+        } else if (event is NoteOnEvent && event.velocity > 0) {
           final key = (event.channel, event.noteNumber);
           pendingNotes.putIfAbsent(key, () => []).add((tick, event.velocity));
         } else if (event is NoteOffEvent ||
@@ -108,6 +134,7 @@ class MidiVisualization {
     }
 
     notes.sort((a, b) => a.startTick.compareTo(b.startTick));
+    programChanges.sort((a, b) => a.tick.compareTo(b.tick));
     if (notes.isEmpty) {
       throw const FormatException(
         'Le fichier MIDI ne contient aucune note à afficher.',
@@ -116,9 +143,18 @@ class MidiVisualization {
 
     return MidiVisualization(
       notes: List.unmodifiable(notes),
+      programChanges: List.unmodifiable(programChanges),
+      trackNames: List.unmodifiable(namesByTrack),
       ticksPerBeat: ticksPerBeat,
       totalTicks: totalTicks,
       trackCount: midi.tracks.length,
     );
   }
+}
+
+String? _trackName(List<MidiEvent> track) {
+  for (final event in track) {
+    if (event is TrackNameEvent) return event.text;
+  }
+  return null;
 }

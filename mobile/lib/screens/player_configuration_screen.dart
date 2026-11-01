@@ -24,6 +24,9 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
   late int _instrumentProgram = widget.initialConfiguration.instrumentProgram;
   late double _tempo = widget.initialConfiguration.tempoBpm.toDouble();
   late double _volume = widget.initialConfiguration.volumePercent.toDouble();
+  late bool _followScoreInstrument =
+      widget.initialConfiguration.followScoreInstrument;
+  late bool _followScoreTempo = widget.initialConfiguration.followScoreTempo;
   bool _isSaving = false;
   bool _isTestingAudio = false;
   String? _testAudioError;
@@ -39,6 +42,8 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
         instrumentProgram: _instrumentProgram,
         tempoBpm: _tempo.round(),
         volumePercent: _volume.round(),
+        followScoreInstrument: _followScoreInstrument,
+        followScoreTempo: _followScoreTempo,
       ));
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
@@ -58,6 +63,8 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
         instrumentProgram: _instrumentProgram,
         tempoBpm: _tempo.round(),
         volumePercent: _volume.round(),
+        followScoreInstrument: _followScoreInstrument,
+        followScoreTempo: _followScoreTempo,
       ));
     } catch (error) {
       if (mounted) {
@@ -163,7 +170,7 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
                             ),
                           ),
                       ],
-                      onChanged: _isSaving
+                      onChanged: _isSaving || _followScoreInstrument
                           ? null
                           : (program) {
                               if (program != null) {
@@ -172,10 +179,27 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
                             },
                     ),
                     const SizedBox(height: 10),
+                    SwitchListTile(
+                      key: const Key('follow_score_instrument'),
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Suivre les instruments de la partition'),
+                      subtitle: Text(
+                        _followScoreInstrument
+                            ? 'Les changements notés sont conservés.'
+                            : 'Un instrument unique remplacera les indications.',
+                      ),
+                      value: _followScoreInstrument,
+                      onChanged: _isSaving
+                          ? null
+                          : (value) => setState(
+                                () => _followScoreInstrument = value,
+                              ),
+                    ),
                     Text(
-                      'Le canal de percussion conserve son timbre d’origine.',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: Colors.white60),
+                      'Sans indication explicite, le son reste neutre. '
+                      'Les percussions gardent leur canal dédié.',
+                      style:
+                          theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
                     ),
                   ],
                 ),
@@ -223,7 +247,7 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
                       divisions: 200,
                       value: _tempo.clamp(40, 240),
                       label: '${_tempo.round()} BPM',
-                      onChanged: _isSaving
+                      onChanged: _isSaving || _followScoreTempo
                           ? null
                           : (value) => setState(() => _tempo = value),
                     ),
@@ -234,6 +258,20 @@ class _PlayerConfigurationScreenState extends State<PlayerConfigurationScreen> {
                         Text('240 BPM',
                             style: TextStyle(color: Colors.white54)),
                       ],
+                    ),
+                    SwitchListTile(
+                      key: const Key('follow_score_tempo'),
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Suivre les changements de tempo'),
+                      subtitle: Text(
+                        _followScoreTempo
+                            ? 'Le rythme varie selon la partition.'
+                            : 'Le tempo choisi conserve les variations relatives.',
+                      ),
+                      value: _followScoreTempo,
+                      onChanged: _isSaving
+                          ? null
+                          : (value) => setState(() => _followScoreTempo = value),
                     ),
                   ],
                 ),

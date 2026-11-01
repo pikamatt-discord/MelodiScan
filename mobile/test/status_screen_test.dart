@@ -49,6 +49,7 @@ void main() {
       'progress': 1.0,
       'title': 'Titre détecté',
       'score_metadata': {
+        'title': 'Titre détecté',
         'measure_count': 32,
         'creators': [
           {'role': 'composer', 'name': 'Alice Martin'}
@@ -56,6 +57,8 @@ void main() {
         'parts': [
           {
             'name': 'Piano',
+            'instrument_name': 'Piano',
+            'is_percussion': false,
             'key_fifths': -2,
             'meter': {'beats': '4', 'beat_type': '4'}
           }
@@ -87,6 +90,7 @@ void main() {
     expect(find.textContaining('32 mesures'), findsOneWidget);
     expect(find.textContaining('Compositeur : Alice Martin'), findsOneWidget);
     expect(find.textContaining('Piano'), findsOneWidget);
+    expect(find.textContaining('Instruments : Piano'), findsOneWidget);
     expect(find.textContaining('2 bémols'), findsOneWidget);
     expect(find.textContaining('4/4'), findsOneWidget);
     expect(find.textContaining('96 BPM détectés'), findsOneWidget);

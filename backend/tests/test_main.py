@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import mido
 import pytest
 from fastapi.testclient import TestClient
 
@@ -611,17 +612,19 @@ def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path, monkeypat
 
     partitura.load_musicxml = fail_to_parse
     monkeypatch.setitem(sys.modules, "partitura", partitura)
+    musicxml_path = tmp_path / "score.musicxml"
+    musicxml_path.write_text("<score-partwise/>", encoding="utf-8")
     midi_path = tmp_path / "score.mid"
 
-    with pytest.raises(OMRProcessingError, match="invalid MusicXML"):
-        convert_musicxml_to_midi(str(tmp_path / "score.musicxml"), str(midi_path))
+    with pytest.raises(OMRProcessingError, match="MusicXML to MIDI conversion failed"):
+        convert_musicxml_to_midi(str(musicxml_path), str(midi_path))
 
     assert not midi_path.exists()
 
 
 def test_musicxml_conversion_uses_partitura_score_midi_export(tmp_path, monkeypatch):
     partitura = ModuleType("partitura")
-    score = object()
+    part = type("Part", (), {"id": "P1", "notes_tied": [object()]})()
     midi_path = tmp_path / "score.mid"
     midi_content = (
         b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x00\x60"
@@ -629,7 +632,7 @@ def test_musicxml_conversion_uses_partitura_score_midi_export(tmp_path, monkeypa
     )
     saved_scores = []
 
-    partitura.load_musicxml = lambda _path: score
+    partitura.load_musicxml = lambda _path: type("Score", (), {"parts": [part]})()
 
     def save_score_midi(received_score, output_path):
         saved_scores.append(received_score)
@@ -638,14 +641,75 @@ def test_musicxml_conversion_uses_partitura_score_midi_export(tmp_path, monkeypa
 
     partitura.save_score_midi = save_score_midi
     monkeypatch.setitem(sys.modules, "partitura", partitura)
+    musicxml_path = tmp_path / "score.musicxml"
+    musicxml_path.write_text(
+        """<score-partwise>
+          <part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list>
+          <part id="P1"><measure number="1"/></part>
+        </score-partwise>""",
+        encoding="utf-8",
+    )
 
     result = convert_musicxml_to_midi(
-        str(tmp_path / "score.musicxml"), str(midi_path)
+        str(musicxml_path), str(midi_path)
     )
 
     assert result == str(midi_path)
-    assert saved_scores == [score]
-    assert midi_path.read_bytes() == midi_content
+    assert saved_scores == [[part]]
+    midi = mido.MidiFile(midi_path)
+    assert midi.tracks[0][0].type == "track_name"
+    assert midi.tracks[0][0].name == "P1"
+
+
+def test_musicxml_conversion_exports_midi_programs_and_drum_notes(tmp_path):
+    musicxml_path = tmp_path / "score.musicxml"
+    musicxml_path.write_text(
+        """<score-partwise>
+          <part-list>
+            <score-part id="P1">
+              <part-name>Flute</part-name>
+              <score-instrument id="I1"><instrument-name>Flute</instrument-name></score-instrument>
+              <midi-instrument id="I1"><midi-channel>1</midi-channel><midi-program>74</midi-program></midi-instrument>
+            </score-part>
+            <score-part id="P2">
+              <part-name>Drum Kit</part-name>
+              <score-instrument id="I2"><instrument-name>Acoustic Bass Drum</instrument-name></score-instrument>
+              <midi-instrument id="I2"><midi-channel>10</midi-channel><midi-program>1</midi-program><midi-unpitched>36</midi-unpitched></midi-instrument>
+            </score-part>
+          </part-list>
+          <part id="P1">
+            <measure number="1">
+              <attributes><divisions>24</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+              <note><pitch><step>C</step><octave>5</octave></pitch><duration>24</duration><type>quarter</type></note>
+            </measure>
+          </part>
+          <part id="P2">
+            <measure number="1">
+              <attributes><divisions>24</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>percussion</sign><line>2</line></clef></attributes>
+              <note><instrument id="I2"/><unpitched><display-step>F</display-step><display-octave>4</display-octave></unpitched><duration>24</duration><type>quarter</type></note>
+            </measure>
+          </part>
+        </score-partwise>""",
+        encoding="utf-8",
+    )
+    midi_path = tmp_path / "score.mid"
+
+    convert_musicxml_to_midi(str(musicxml_path), str(midi_path))
+
+    midi = mido.MidiFile(midi_path)
+    assert [track[0].name for track in midi.tracks] == ["P1", "P2"]
+    flute_events = [event for event in midi.tracks[0] if not event.is_meta]
+    drum_events = [event for event in midi.tracks[1] if not event.is_meta]
+    assert any(
+        event.type == "program_change"
+        and event.program == 73
+        and event.channel == 0
+        for event in flute_events
+    )
+    assert any(
+        event.type == "note_on" and event.note == 36 and event.channel == 9
+        for event in drum_events
+    )
 
 
 def test_result_requires_completed_task(tmp_path):

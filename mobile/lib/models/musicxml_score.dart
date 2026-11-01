@@ -75,12 +75,16 @@ class ScorePartInfo {
     required this.name,
     required this.staves,
     required this.instrumentProgram,
+    required this.instrumentName,
+    required this.isPercussion,
   });
 
   final String id;
   final String name;
   final int staves;
   final int? instrumentProgram;
+  final String? instrumentName;
+  final bool isPercussion;
 }
 
 class ScoreCreator {
@@ -139,7 +143,8 @@ class MusicXmlScore {
     final document = XmlDocument.parse(source);
     final work = _firstChild(document.rootElement, 'work');
     final title = _text(work ?? document.rootElement, 'work-title') ??
-        _text(document.rootElement, 'movement-title');
+        _text(document.rootElement, 'movement-title') ??
+        _creditTitle(document.rootElement);
     final identification = _firstChild(document.rootElement, 'identification');
     final creators = <ScoreCreator>[
       if (identification != null)
@@ -160,6 +165,8 @@ class MusicXmlScore {
     }
     final partNames = <String, String>{};
     final partPrograms = <String, int>{};
+    final partInstruments = <String, String>{};
+    final partPercussion = <String, bool>{};
     final partList = _firstChild(document.rootElement, 'part-list');
     if (partList != null) {
       for (final scorePart in _children(partList, 'score-part')) {
@@ -168,6 +175,11 @@ class MusicXmlScore {
         final name = _text(scorePart, 'part-name') ??
             _text(scorePart, 'part-abbreviation');
         if (name != null) partNames[id] = name;
+        final scoreInstrument = _firstChild(scorePart, 'score-instrument');
+        final instrumentName = scoreInstrument == null
+            ? null
+            : _text(scoreInstrument, 'instrument-name');
+        if (instrumentName != null) partInstruments[id] = instrumentName;
         final midiProgram = int.tryParse(
           _text(_firstChild(scorePart, 'midi-instrument') ?? scorePart,
                   'midi-program') ??
@@ -176,6 +188,16 @@ class MusicXmlScore {
         if (midiProgram != null) {
           partPrograms[id] = (midiProgram - 1).clamp(0, 127).toInt();
         }
+        final midiChannel = int.tryParse(_text(
+              _firstChild(scorePart, 'midi-instrument') ?? scorePart,
+              'midi-channel',
+            ) ??
+            '');
+        partPercussion[id] = midiChannel == 10 ||
+            _looksLikePercussion(instrumentName ?? name ?? '') ||
+            parts.any((part) =>
+                part.getAttribute('id') == id &&
+                (_hasPercussionClef(part) || _hasUnpitchedNotes(part)));
       }
     }
 
@@ -205,6 +227,9 @@ class MusicXmlScore {
         name: partNames[id] ?? 'Partie ${index + 1}',
         staves: _staffCount(parts[index]),
         instrumentProgram: partPrograms[id],
+        instrumentName: partInstruments[id],
+        isPercussion:
+            partPercussion[id] ?? _looksLikePercussion(partNames[id] ?? ''),
       ));
     }
     final tempoChanges = _parseTempoChanges(parts, ticksPerBeat);
@@ -281,10 +306,20 @@ class MusicXmlScore {
           final duration =
               double.tryParse(_text(element, 'duration') ?? '') ?? 0;
           final pitch = _firstChild(element, 'pitch');
+          final unpitched = _firstChild(element, 'unpitched');
           final rest = _firstChild(element, 'rest') != null;
-          final step = pitch == null ? null : _text(pitch, 'step');
-          final octave =
-              int.tryParse(pitch == null ? '' : _text(pitch, 'octave') ?? '');
+          final step = pitch != null
+              ? _text(pitch, 'step')
+              : unpitched == null
+                  ? null
+                  : _text(unpitched, 'display-step');
+          final octave = int.tryParse(
+            pitch != null
+                ? _text(pitch, 'octave') ?? ''
+                : unpitched == null
+                    ? ''
+                    : _text(unpitched, 'display-octave') ?? '',
+          );
           if (rest || (step != null && octave != null)) {
             final alter = int.tryParse(
                     pitch == null ? '' : _text(pitch, 'alter') ?? '') ??
@@ -450,6 +485,17 @@ List<ScoreTempoChange> _parseTempoChanges(
                       .round();
               changes[(tick, bpm)] = ScoreTempoChange(tick: tick, bpm: bpm);
             }
+          case 'sound':
+            final bpm = _tempoFromSound(element);
+            if (bpm != null) {
+              final offset =
+                  double.tryParse(_text(element, 'offset') ?? '0') ?? 0;
+              final tick =
+                  ((elapsedQuarterNotes + (cursor + offset) / divisions) *
+                          ticksPerBeat)
+                      .round();
+              changes[(tick, bpm)] = ScoreTempoChange(tick: tick, bpm: bpm);
+            }
         }
       }
 
@@ -506,10 +552,28 @@ bool _hasMultipleStaves(XmlElement part) {
   return false;
 }
 
+bool _hasPercussionClef(XmlElement part) {
+  for (final clef in part.descendants.whereType<XmlElement>()) {
+    if (clef.name.local == 'clef' && _text(clef, 'sign') == 'percussion') {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _hasUnpitchedNotes(XmlElement part) =>
+    part.descendants.whereType<XmlElement>().any(
+          (element) => element.name.local == 'unpitched',
+        );
+
+bool _looksLikePercussion(String name) =>
+    RegExp(r'\b(percussion|percussions|drum|drums|batterie|bater[ií]a)\b',
+            caseSensitive: false)
+        .hasMatch(name);
+
 double? _tempoFromDirection(XmlElement direction) {
-  final sound = _firstChild(direction, 'sound');
-  final soundTempo = double.tryParse(sound?.getAttribute('tempo') ?? '');
-  if (soundTempo != null && soundTempo >= 20 && soundTempo <= 400) {
+  final soundTempo = _tempoFromSound(_firstChild(direction, 'sound'));
+  if (soundTempo != null) {
     return soundTempo;
   }
 
@@ -531,6 +595,24 @@ double? _tempoFromDirection(XmlElement direction) {
     final dots = _children(metronome, 'beat-unit-dot').length;
     final converted = bpm * quarterNotesPerUnit * (2 - math.pow(0.5, dots));
     if (converted >= 20 && converted <= 400) return converted.toDouble();
+  }
+  return null;
+}
+
+double? _tempoFromSound(XmlElement? sound) {
+  if (sound == null) return null;
+  final tempo = double.tryParse(sound.getAttribute('tempo') ?? '');
+  return tempo != null && tempo >= 20 && tempo <= 400 ? tempo : null;
+}
+
+String? _creditTitle(XmlElement root) {
+  for (final credit in _children(root, 'credit')) {
+    if (_text(credit, 'credit-type') != 'title') continue;
+    final words = _children(credit, 'credit-words')
+        .map((element) => element.innerText.trim())
+        .where((text) => text.isNotEmpty);
+    final title = words.join(' ');
+    if (title.isNotEmpty) return title;
   }
   return null;
 }

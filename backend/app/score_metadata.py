@@ -43,15 +43,9 @@ def _clef_name(clef: ElementTree.Element) -> str:
 
 def _tempo_from_direction(direction: ElementTree.Element) -> float | None:
     sound = _child(direction, "sound")
-    if sound is not None:
-        tempo = sound.get("tempo")
-        if tempo:
-            try:
-                value = float(tempo)
-                if 20 <= value <= 400:
-                    return value
-            except ValueError:
-                pass
+    sound_tempo = _tempo_from_sound(sound)
+    if sound_tempo is not None:
+        return sound_tempo
 
     for metronome in (
         element for element in direction.iter()
@@ -81,6 +75,30 @@ def _tempo_from_direction(direction: ElementTree.Element) -> float | None:
     return None
 
 
+def _tempo_from_sound(sound: ElementTree.Element | None) -> float | None:
+    if sound is None:
+        return None
+    try:
+        tempo = float(sound.get("tempo") or "")
+    except ValueError:
+        return None
+    return tempo if 20 <= tempo <= 400 else None
+
+
+def _credit_title(root: ElementTree.Element) -> str | None:
+    for credit in _children(root, "credit"):
+        if _text(credit, "credit-type") != "title":
+            continue
+        words = [
+            (element.text or "").strip()
+            for element in _children(credit, "credit-words")
+            if (element.text or "").strip()
+        ]
+        if words:
+            return " ".join(words)
+    return None
+
+
 def analyze_musicxml(musicxml_path: str) -> dict:
     """Extract only metadata explicitly present in the MusicXML document."""
     root = ElementTree.parse(musicxml_path).getroot()
@@ -89,7 +107,11 @@ def analyze_musicxml(musicxml_path: str) -> dict:
         (item for item in root if _local_name(item) == "identification"),
         None,
     )
-    title = _text(work, "work-title") or _text(root, "movement-title")
+    title = (
+        _text(work, "work-title")
+        or _text(root, "movement-title")
+        or _credit_title(root)
+    )
     creators = []
     if identification is not None:
         for creator in _children(identification, "creator"):
@@ -99,7 +121,9 @@ def analyze_musicxml(musicxml_path: str) -> dict:
                 creators.append({"role": role or "creator", "name": name})
 
     part_names = {}
+    part_instruments = {}
     part_programs = {}
+    part_channels = {}
     part_list = next((item for item in root if _local_name(item) == "part-list"), None)
     if part_list is not None:
         for score_part in _children(part_list, "score-part"):
@@ -110,6 +134,11 @@ def analyze_musicxml(musicxml_path: str) -> dict:
                 _text(score_part, "part-name") or
                 _text(score_part, "part-abbreviation")
             )
+            score_instrument = next(
+                (item for item in score_part if _local_name(item) == "score-instrument"),
+                None,
+            )
+            part_instruments[part_id] = _text(score_instrument, "instrument-name")
             midi_instrument = next(
                 (item for item in score_part if _local_name(item) == "midi-instrument"),
                 None,
@@ -118,6 +147,12 @@ def analyze_musicxml(musicxml_path: str) -> dict:
             if program:
                 try:
                     part_programs[part_id] = min(127, max(0, int(program) - 1))
+                except ValueError:
+                    pass
+            channel = _text(midi_instrument, "midi-channel")
+            if channel:
+                try:
+                    part_channels[part_id] = int(channel)
                 except ValueError:
                     pass
 
@@ -135,6 +170,14 @@ def analyze_musicxml(musicxml_path: str) -> dict:
         clefs = {}
         fifths = None
         meter = None
+        initial_clefs = {}
+        initial_fifths = None
+        initial_meter = None
+        key_changes = []
+        meter_changes = []
+        clef_changes = []
+        previous_clefs = {}
+        has_unpitched_notes = False
         note_count = 0
         divisions = 1.0
         elapsed_quarters = 0.0
@@ -167,14 +210,54 @@ def analyze_musicxml(musicxml_path: str) -> dict:
                             fifths = int(fifths_value)
                         except ValueError:
                             pass
+                    if fifths is not None:
+                        if initial_fifths is None:
+                            initial_fifths = fifths
+                        if not key_changes or key_changes[-1]["fifths"] != fifths:
+                            key_changes.append({
+                                "quarter_position": round(
+                                    elapsed_quarters + cursor / divisions,
+                                    6,
+                                ),
+                                "measure": measure_index,
+                                "fifths": fifths,
+                            })
                     time = _child(item, "time")
                     beats = _text(time, "beats")
                     beat_type = _text(time, "beat-type")
                     if beats and beat_type:
                         meter = {"beats": beats, "beat_type": beat_type}
+                        if initial_meter is None:
+                            initial_meter = meter.copy()
+                        if (
+                            not meter_changes
+                            or meter_changes[-1]["beats"] != beats
+                            or meter_changes[-1]["beat_type"] != beat_type
+                        ):
+                            meter_changes.append({
+                                "quarter_position": round(
+                                    elapsed_quarters + cursor / divisions,
+                                    6,
+                                ),
+                                "measure": measure_index,
+                                **meter,
+                            })
                     for clef in _children(item, "clef"):
                         number = clef.get("number", "1")
-                        clefs[number] = _clef_name(clef)
+                        clef_name = _clef_name(clef)
+                        clefs[number] = clef_name
+                        initial_clefs.setdefault(number, clef_name)
+                        if previous_clefs.get(number) != clef_name:
+                            clef_changes.append({
+                                "quarter_position": round(
+                                    elapsed_quarters + cursor / divisions,
+                                    6,
+                                ),
+                                "measure": measure_index,
+                                "staff": number,
+                                "clef": clef_name,
+                            })
+                        previous_clefs[number] = clef_name
                         try:
                             staves = max(staves, int(number))
                         except ValueError:
@@ -188,6 +271,7 @@ def analyze_musicxml(musicxml_path: str) -> dict:
                     cursor += -delta if name == "backup" else delta
                     furthest = max(furthest, cursor)
                 elif name == "note":
+                    has_unpitched_notes |= _child(item, "unpitched") is not None
                     if _child(item, "rest") is None:
                         note_count += 1
                     staff = _text(item, "staff")
@@ -227,6 +311,23 @@ def analyze_musicxml(musicxml_path: str) -> dict:
                             "bpm": round(tempo, 2),
                             "measure": measure_index,
                         }
+                elif name == "sound":
+                    tempo = _tempo_from_sound(item)
+                    if tempo is not None:
+                        offset_text = _text(item, "offset")
+                        try:
+                            offset = float(offset_text or "0")
+                        except ValueError:
+                            offset = 0
+                        quarter_position = round(
+                            elapsed_quarters + (cursor + offset) / divisions,
+                            6,
+                        )
+                        tempo_changes[(quarter_position, tempo)] = {
+                            "quarter_position": quarter_position,
+                            "bpm": round(tempo, 2),
+                            "measure": measure_index,
+                        }
 
             expected_quarters = 0.0
             if meter:
@@ -238,16 +339,31 @@ def analyze_musicxml(musicxml_path: str) -> dict:
             duration_quarters = max(expected_quarters, furthest / divisions)
             elapsed_quarters += duration_quarters
 
+        instrument_name = part_instruments.get(part_id)
+        instrument_labels = (
+            f"{instrument_name or ''} {part_names.get(part_id) or ''}"
+        ).casefold()
+        is_percussion = (
+            has_unpitched_notes
+            or part_channels.get(part_id) == 10
+            or any(clef == "percussion" for clef in initial_clefs.values())
+            or any(word in instrument_labels for word in ("percussion", "drum", "batterie"))
+        )
         parts.append({
             "id": part_id or f"part-{part_index}",
             "name": part_names.get(part_id) or f"Partie {part_index}",
             "instrument_program": part_programs.get(part_id),
+            "instrument_name": instrument_name,
+            "is_percussion": is_percussion,
             "staves": staves,
-            "clefs": clefs,
+            "clefs": initial_clefs,
             "measure_count": len(measures),
             "note_count": note_count,
-            "key_fifths": fifths,
-            "meter": meter,
+            "key_fifths": initial_fifths,
+            "meter": initial_meter,
+            "key_changes": key_changes,
+            "meter_changes": meter_changes,
+            "clef_changes": clef_changes,
         })
 
     return {

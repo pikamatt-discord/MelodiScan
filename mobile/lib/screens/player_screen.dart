@@ -213,10 +213,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
         musicXmlSource,
         ticksPerBeat: visualization.ticksPerBeat,
       );
-      final selectedPartTrackIndex = score.parts.length ==
-              visualization.trackCount
-          ? score.parts.indexWhere((part) => part.id == score.selectedPartId)
-          : null;
+      final selectedPartTrackIndex = _trackIndexForPart(
+        score,
+        visualization,
+        score.selectedPartId,
+      );
       final scoreVisualization = selectedPartTrackIndex != null &&
               selectedPartTrackIndex >= 0
           ? MidiVisualization.parse(bytes, trackIndex: selectedPartTrackIndex)
@@ -307,17 +308,52 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _testPlaybackAudio(
     MidiPlayerConfiguration configuration,
   ) async {
+    final detectedInstrumentProgram = _detectedInstrumentProgram;
     final configuredBytes = MidiConfiguration.apply(
       _midiBytes!,
       configuration,
       selectedTrackIndex: _selectedPartTrackIndex,
+      detectedInstrumentProgram: detectedInstrumentProgram,
     );
     await _playback.prepare(configuredBytes);
     _hasPreparedPlayback = true;
     await _playback.testNote(
-      instrumentProgram: configuration.instrumentProgram,
+      instrumentProgram: configuration.followScoreInstrument
+          ? detectedInstrumentProgram ?? configuration.instrumentProgram
+          : configuration.instrumentProgram,
       volumePercent: configuration.volumePercent,
     );
+  }
+
+  ScorePartInfo? get _selectedScorePart {
+    final score = _score;
+    if (score == null) return null;
+    for (final part in score.parts) {
+      if (part.id == score.selectedPartId) return part;
+    }
+    return null;
+  }
+
+  int? _trackIndexForPart(
+    MusicXmlScore score,
+    MidiVisualization visualization,
+    String partId,
+  ) {
+    final namedTrack = visualization.trackNames.indexOf(partId);
+    if (namedTrack >= 0) return namedTrack;
+    if (score.parts.length != visualization.trackCount) return null;
+    final index = score.parts.indexWhere((part) => part.id == partId);
+    return index < 0 ? null : index;
+  }
+
+  int? get _detectedInstrumentProgram {
+    final part = _selectedScorePart;
+    return part?.instrumentProgram ??
+        (part == null
+            ? null
+            : GeneralMidiInstrument.programForName(
+                part.instrumentName ?? '',
+              ));
   }
 
   Future<void> _showTempoMap(MusicXmlScore score) async {
@@ -361,9 +397,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final selectedPart =
         score.parts.firstWhere((part) => part.id == score.selectedPartId);
     final openingMeasure = score.measures.first;
-    final selectedInstrument = selectedPart.instrumentProgram == null
+    final selectedInstrumentProgram = selectedPart.instrumentProgram ??
+        GeneralMidiInstrument.programForName(
+          selectedPart.instrumentName ?? selectedPart.name,
+        );
+    final selectedInstrument = selectedInstrumentProgram == null
         ? null
-        : GeneralMidiInstrument.byProgram(selectedPart.instrumentProgram!);
+        : GeneralMidiInstrument.byProgram(selectedInstrumentProgram);
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -407,7 +447,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               title: Text(selectedPart.name),
               subtitle: Text(
                 '${selectedPart.staves} portée${selectedPart.staves > 1 ? 's' : ''}'
-                '${selectedInstrument == null ? '' : '  ·  ${selectedInstrument.name}'}',
+                '  ·  ${selectedPart.isPercussion ? 'Percussions' : selectedInstrument?.name ?? selectedPart.instrumentName ?? 'Instrument non identifié'}',
               ),
             ),
             ListTile(
@@ -452,6 +492,31 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return activeTempo?.bpm;
   }
 
+  String _instrumentLabelAtTick(
+    MidiPlayerConfiguration configuration,
+    ScorePartInfo? part,
+    MidiVisualization visualization,
+    int tick,
+  ) {
+    if (!configuration.followScoreInstrument) {
+      return GeneralMidiInstrument.byProgram(configuration.instrumentProgram)
+          .name;
+    }
+    if (part?.isPercussion == true ||
+        visualization.notes.isNotEmpty &&
+            visualization.notes.every((note) => note.channel == 9)) {
+      return 'Percussions';
+    }
+
+    var program = _detectedInstrumentProgram;
+    for (final change in visualization.programChanges) {
+      if (change.tick > tick) break;
+      program = change.program;
+    }
+    if (program != null) return GeneralMidiInstrument.byProgram(program).name;
+    return part?.instrumentName ?? 'Instrument non identifié';
+  }
+
   Future<void> _runPlaybackAction() async {
     final wasPlaying = _isPlaying;
     setState(() {
@@ -465,6 +530,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _midiBytes!,
           _configuration!,
           selectedTrackIndex: _selectedPartTrackIndex,
+          detectedInstrumentProgram: _detectedInstrumentProgram,
         );
         await _playback.prepare(configuredBytes);
         _hasPreparedPlayback = true;
@@ -730,8 +796,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final score = _score!;
     final configuration = _configuration!;
     final pitchRange = _pitchRange(visualization.notes);
-    final instrument =
-        GeneralMidiInstrument.byProgram(configuration.instrumentProgram);
+    final selectedPart = _selectedScorePart;
+    final isPercussion = selectedPart?.isPercussion == true ||
+        visualization.notes.isNotEmpty &&
+            visualization.notes.every((note) => note.channel == 9);
 
     return Column(
       children: [
@@ -765,12 +833,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                   ?.copyWith(fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 3),
-                            Text(
-                              '${instrument.name}  ·  ${configuration.tempoBpm} BPM  ·  ${visualization.notes.length} notes${score.tempoChanges.isEmpty ? '' : '  ·  partition : ${score.tempoChanges.first.bpm.round()} BPM'}',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall
-                                  ?.copyWith(color: Colors.white60),
+                            ValueListenableBuilder<int>(
+                              valueListenable: _playbackPosition,
+                              builder: (context, currentTick, _) {
+                                final instrumentLabel = _instrumentLabelAtTick(
+                                  configuration,
+                                  selectedPart,
+                                  visualization,
+                                  currentTick,
+                                );
+                                final tempo = configuration.followScoreTempo
+                                    ? _tempoAtTick(score, currentTick) ??
+                                        configuration.tempoBpm
+                                    : configuration.tempoBpm;
+                                return Text(
+                                  '$instrumentLabel  ·  $tempo BPM  ·  ${visualization.notes.length} notes',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: Colors.white60),
+                                );
+                              },
                             ),
                           ],
                         ),
@@ -880,6 +963,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       totalTicks: visualization.totalTicks,
                       currentTick: _playbackPosition,
                       isPlaying: _isPlaying,
+                      isPercussion: isPercussion,
                       lowPitch: pitchRange.$1,
                       highPitch: pitchRange.$2,
                     )
@@ -1038,9 +1122,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
 
-    if (score.parts.length != _visualization!.trackCount) return;
-    final partTrackIndex = score.parts.indexWhere((part) => part.id == partId);
-    if (partTrackIndex < 0) return;
+    final partTrackIndex = _trackIndexForPart(
+      score,
+      visualization,
+      partId,
+    );
+    if (partTrackIndex == null) return;
 
     final updatedScore = MusicXmlScore.parse(
       source,
@@ -1092,6 +1179,7 @@ class _PianoRoll extends StatefulWidget {
     required this.totalTicks,
     required this.currentTick,
     required this.isPlaying,
+    required this.isPercussion,
     required this.lowPitch,
     required this.highPitch,
   });
@@ -1102,6 +1190,7 @@ class _PianoRoll extends StatefulWidget {
   final int totalTicks;
   final ValueListenable<int> currentTick;
   final bool isPlaying;
+  final bool isPercussion;
   final int lowPitch;
   final int highPitch;
 
@@ -1251,21 +1340,30 @@ class _PianoRollState extends State<_PianoRoll>
                       currentTick: _smoothTick,
                       lowPitch: widget.lowPitch,
                       highPitch: widget.highPitch,
+                      isPercussion: widget.isPercussion,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          SizedBox(
-            height: 72,
-            child: _PianoKeyboard(
-              timeline: _timeline,
-              currentTick: _smoothTick,
-              lowPitch: widget.lowPitch,
-              highPitch: widget.highPitch,
+          if (widget.isPercussion)
+            SizedBox(
+              height: 72,
+              child: _DrumLegend(
+                pitches: _timeline.notes.map((note) => note.pitch).toSet(),
+              ),
+            )
+          else
+            SizedBox(
+              height: 72,
+              child: _PianoKeyboard(
+                timeline: _timeline,
+                currentTick: _smoothTick,
+                lowPitch: widget.lowPitch,
+                highPitch: widget.highPitch,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -1370,12 +1468,14 @@ class _PianoNotesPainter extends CustomPainter {
     required this.currentTick,
     required this.lowPitch,
     required this.highPitch,
+    required this.isPercussion,
   }) : super(repaint: currentTick);
 
   final _PianoRollTimeline timeline;
   final ValueListenable<double> currentTick;
   final int lowPitch;
   final int highPitch;
+  final bool isPercussion;
   final Map<int, TextPainter> _labels = {};
 
   static const _colors = [
@@ -1418,7 +1518,8 @@ class _PianoNotesPainter extends CustomPainter {
           index,
           () => TextPainter(
             text: TextSpan(
-              text: _noteName(note.pitch),
+              text:
+                  isPercussion ? _drumName(note.pitch) : _noteName(note.pitch),
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -1441,7 +1542,8 @@ class _PianoNotesPainter extends CustomPainter {
       oldDelegate.timeline != timeline ||
       oldDelegate.currentTick != currentTick ||
       oldDelegate.lowPitch != lowPitch ||
-      oldDelegate.highPitch != highPitch;
+      oldDelegate.highPitch != highPitch ||
+      oldDelegate.isPercussion != isPercussion;
 
   String _noteName(int pitch) {
     const names = [
@@ -1461,6 +1563,106 @@ class _PianoNotesPainter extends CustomPainter {
     return '${names[pitch % 12]}${pitch ~/ 12 - 1}';
   }
 }
+
+class _DrumLegend extends StatelessWidget {
+  const _DrumLegend({required this.pitches});
+
+  final Set<int> pitches;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final sortedPitches = pitches.toList()..sort();
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      scrollDirection: Axis.horizontal,
+      itemCount: sortedPitches.length,
+      separatorBuilder: (_, __) => const SizedBox(width: 8),
+      itemBuilder: (context, index) {
+        final pitch = sortedPitches[index];
+        return Container(
+          width: 130,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'MIDI $pitch',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.secondary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                _drumName(pitch),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+String _drumName(int pitch) => switch (pitch) {
+      35 => 'Grosse caisse acoustique',
+      36 => 'Grosse caisse',
+      37 => 'Rimshot',
+      38 => 'Caisse claire acoustique',
+      39 => 'Clap',
+      40 => 'Caisse claire électrique',
+      41 => 'Tom basse',
+      42 => 'Charleston fermé',
+      43 => 'Tom basse aigu',
+      44 => 'Charleston pédale',
+      45 => 'Tom bas',
+      46 => 'Charleston ouvert',
+      47 => 'Tom médium-bas',
+      48 => 'Tom médium-aigu',
+      49 => 'Crash',
+      50 => 'Tom aigu',
+      51 => 'Ride',
+      52 => 'Cymbale chinoise',
+      53 => 'Cloche de ride',
+      54 => 'Tambourin',
+      55 => 'Splash',
+      56 => 'Cloche',
+      57 => 'Crash 2',
+      58 => 'Vibra-slap',
+      59 => 'Ride 2',
+      60 => 'Bongo aigu',
+      61 => 'Bongo grave',
+      62 => 'Conga aigu étouffée',
+      63 => 'Conga aigu ouverte',
+      64 => 'Conga grave',
+      65 => 'Timbale aiguë',
+      66 => 'Timbale grave',
+      67 => 'Agogo aigu',
+      68 => 'Agogo grave',
+      69 => 'Cabasa',
+      70 => 'Maracas',
+      71 => 'Sifflet court',
+      72 => 'Sifflet long',
+      73 => 'Guiro court',
+      74 => 'Guiro long',
+      75 => 'Claves',
+      76 => 'Bloc de bois aigu',
+      77 => 'Bloc de bois grave',
+      78 => 'Cuica étouffée',
+      79 => 'Cuica ouverte',
+      80 => 'Triangle étouffé',
+      81 => 'Triangle ouvert',
+      _ => 'Percussion $pitch',
+    };
 
 class _PianoKeyboard extends StatelessWidget {
   const _PianoKeyboard({
