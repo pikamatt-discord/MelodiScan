@@ -20,6 +20,7 @@ class PlayerScreen extends StatefulWidget {
   final String title;
   final String serverUrl;
   final String apiKey;
+  final String? profileId;
   final http.Client? httpClient;
   final MidiPlayback? midiPlayback;
 
@@ -29,6 +30,7 @@ class PlayerScreen extends StatefulWidget {
     required this.title,
     required this.serverUrl,
     this.apiKey = '',
+    this.profileId,
     this.httpClient,
     this.midiPlayback,
   });
@@ -176,10 +178,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     try {
       final client = widget.httpClient ?? createApiClient();
-      final midiUri =
-          Uri.parse('${widget.serverUrl}/api/v1/result/${widget.taskId}');
+      final midiUri = Uri.parse(
+        '${widget.serverUrl}/api/v1/result/${widget.taskId}',
+      ).replace(
+        queryParameters:
+            widget.profileId == null ? null : {'profile_id': widget.profileId!},
+      );
       final musicXmlUri = Uri.parse(
         '${widget.serverUrl}/api/v1/result/${widget.taskId}/musicxml',
+      ).replace(
+        queryParameters:
+            widget.profileId == null ? null : {'profile_id': widget.profileId!},
       );
       final headers =
           widget.apiKey.isEmpty ? null : {'X-API-Key': widget.apiKey};

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profils · MelodiScan</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+      background: #0d0e15;
+      color: #f8f9fa;
+    }
+    body { max-width: 760px; margin: 0 auto; padding: 32px 18px; }
+    a { color: #b69cff; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .profile {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+      margin-top: 16px;
+      padding: 20px;
+      border: 1px solid #2a2f3a;
+      border-radius: 16px;
+      background: #161a20;
+    }
+    label { display: grid; gap: 8px; color: #94a3b8; font-size: 14px; }
+    input, button {
+      box-sizing: border-box;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid #353b48;
+      border-radius: 10px;
+      background: #202630;
+      color: #f8f9fa;
+      font: inherit;
+    }
+    button { cursor: pointer; border: 0; background: #7654d8; font-weight: 700; }
+    #status { min-height: 24px; color: #74e6d1; }
+    @media (max-width: 520px) {
+      .profile { grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Profils</h1>
+    <a href="/dashboard">Retour au dashboard</a>
+  </header>
+  <p>Les trois profils servent à classer les partitions sur les appareils partagés.</p>
+  <p id="status" role="status" aria-live="polite"></p>
+  <div id="profiles"></div>
+  <script>
+    const status = document.getElementById('status');
+    const profiles = document.getElementById('profiles');
+
+    async function loadProfiles() {
+      status.textContent = 'Chargement des profils…';
+      try {
+        const response = await fetch('/api/v1/profiles');
+        if (!response.ok) throw new Error(`Chargement impossible (${response.status}).`);
+        const data = await response.json();
+        profiles.replaceChildren(...data.profiles.map(profile => {
+          const form = document.createElement('form');
+          form.className = 'profile';
+          form.innerHTML = `
+            <label>Nom du profil
+              <input name="name" maxlength="40" required>
+            </label>
+            <button type="submit">Enregistrer</button>`;
+          form.dataset.profileId = profile.id;
+          form.elements.name.value = profile.name;
+          form.addEventListener('submit', saveProfile);
+          return form;
+        }));
+        status.textContent = '';
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    }
+
+    async function saveProfile(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const name = form.elements.name.value.trim();
+      if (!name) {
+        status.textContent = 'Saisissez un nom de profil.';
+        return;
+      }
+      try {
+        const response = await fetch(
+          `/api/v1/profiles/${encodeURIComponent(form.dataset.profileId)}`,
+          {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name}),
+          },
+        );
+        if (!response.ok) throw new Error(`Enregistrement impossible (${response.status}).`);
+        status.textContent = 'Profil enregistré.';
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    }
+
+    loadProfiles();
+  </script>
+</body>
+</html>

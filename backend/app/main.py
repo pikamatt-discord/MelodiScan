@@ -9,12 +9,20 @@ import shutil
 import statistics
 from datetime import datetime, timezone
 from typing import Dict, Any, AsyncGenerator
-from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import redis
+from app.library_store import (
+    DEFAULT_PROFILES,
+    get_profile,
+    get_saved_score,
+    list_profiles,
+    list_saved_scores,
+    rename_profile,
+)
 
 app = FastAPI(
     title="MelodiScan Core Engine API",
@@ -156,6 +164,10 @@ class ScanResponse(BaseModel):
     task_id: str
     status: str
     message: str
+
+
+class ProfileUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
 
 
 async def request_apk_builder(method: str, path: str) -> tuple[int, dict]:
@@ -587,6 +599,7 @@ async def dashboard():
                 </div>
             </div>
             <a class="btn-secondary" href="/dashboard/logs">Logs complets</a>
+            <a class="btn-secondary" href="/dashboard/profiles">Profils</a>
             <span class="badge" id="server-badge">Vérification des services…</span>
         </div>
 
@@ -872,6 +885,13 @@ async def dashboard_logs():
         return HTMLResponse(content=page.read())
 
 
+@app.get("/dashboard/profiles", response_class=HTMLResponse)
+async def dashboard_profiles():
+    page_path = os.path.join(os.path.dirname(__file__), "dashboard_profiles.html")
+    with open(page_path, encoding="utf-8") as page:
+        return HTMLResponse(content=page.read())
+
+
 @app.get("/download/app-release.apk")
 async def download_apk():
     apk_path = "data/apk/app-release.apk"
@@ -891,10 +911,13 @@ async def download_apk():
 @app.post("/api/v1/scan", response_model=ScanResponse)
 async def scan_score(
     file: UploadFile = File(...),
-    title: str = Form("", max_length=200)
+    title: str = Form("", max_length=200),
+    profile_id: str = Form(DEFAULT_PROFILES[0][0]),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
+    if get_profile(profile_id) is None:
+        raise HTTPException(status_code=400, detail="Unknown profile.")
 
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     await file.close()
@@ -933,6 +956,7 @@ async def scan_score(
         "task_id": task_id,
         "title": title.strip() or "Analyse de la partition",
         "user_title": title.strip() or None,
+        "profile_id": profile_id,
         "status": "STATUS_QUEUED",
         "created_at": now,
         "file_path": temp_file_path,
@@ -969,6 +993,61 @@ async def scan_score(
         task_id=task_id,
         status="STATUS_QUEUED",
         message="Score scan request received successfully"
+    )
+
+
+@app.get("/api/v1/profiles")
+async def get_profiles():
+    return {"profiles": list_profiles()}
+
+
+@app.put("/api/v1/profiles/{profile_id}")
+async def update_profile(profile_id: str, update: ProfileUpdate):
+    name = update.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Profile name cannot be empty.")
+    profile = rename_profile(profile_id, name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return profile
+
+
+@app.get("/api/v1/library")
+async def get_profile_library(profile_id: str = Query(..., min_length=1)):
+    if get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    items = list_saved_scores(profile_id)
+    return {
+        "items": [
+            {
+                "task_id": item["task_id"],
+                "profile_id": item["profile_id"],
+                "title": item["title"],
+                "created_at": item["created_at"],
+                "score_metadata": item["score_metadata"],
+                "source_url": f"/api/v1/library/{item['task_id']}/source",
+            }
+            for item in items
+        ]
+    }
+
+
+@app.get("/api/v1/library/{task_id}/source")
+async def get_saved_source(
+    task_id: str, profile_id: str = Query(..., min_length=1)
+):
+    item = get_saved_score(task_id, profile_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Saved score not found.")
+    source_path = item["source_path"]
+    extension = os.path.splitext(source_path)[1].lower()
+    media_type = SCORE_MEDIA_TYPES.get(extension)
+    if media_type is None or not os.path.isfile(source_path):
+        raise HTTPException(status_code=404, detail="Saved source file is unavailable.")
+    return FileResponse(
+        source_path,
+        media_type=media_type,
+        headers={"Content-Disposition": "inline"},
     )
 
 
@@ -1046,8 +1125,15 @@ async def stream_task_status(task_id: str):
 
 
 @app.get("/api/v1/result/{task_id}")
-async def get_task_result(task_id: str):
+async def get_task_result(
+    task_id: str,
+    profile_id: str | None = Query(default=None, min_length=1),
+):
     task_info = get_task_state(task_id)
+    if not task_info or task_info.get("status") != "STATUS_COMPLETED":
+        saved_score = get_saved_score(task_id, profile_id)
+        if saved_score is not None:
+            task_info = saved_score | {"status": "STATUS_COMPLETED"}
     if not task_info:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1068,8 +1154,15 @@ async def get_task_result(task_id: str):
 
 
 @app.get("/api/v1/result/{task_id}/musicxml")
-async def get_task_musicxml(task_id: str):
+async def get_task_musicxml(
+    task_id: str,
+    profile_id: str | None = Query(default=None, min_length=1),
+):
     task_info = get_task_state(task_id)
+    if not task_info or task_info.get("status") != "STATUS_COMPLETED":
+        saved_score = get_saved_score(task_id, profile_id)
+        if saved_score is not None:
+            task_info = saved_score | {"status": "STATUS_COMPLETED"}
     if not task_info:
         raise HTTPException(status_code=404, detail="Task not found")
 

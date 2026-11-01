@@ -12,11 +12,29 @@ import 'status_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   final http.Client? httpClient;
+  final String profileId;
+  final String profileName;
+  final String initialServerUrl;
+  final String initialApiKey;
+  final Future<void> Function() onChangeProfile;
+  final Future<void> Function(String serverUrl, String apiKey)?
+      onConnectionChanged;
 
   const ScanScreen({
     super.key,
     this.httpClient,
+    this.profileId = 'profile-1',
+    this.profileName = 'Profil 1',
+    this.initialServerUrl = const String.fromEnvironment(
+      'MELODISCAN_API_URL',
+      defaultValue: 'http://10.0.2.2:8080',
+    ),
+    this.initialApiKey = const String.fromEnvironment('MELODISCAN_API_KEY'),
+    this.onChangeProfile = _noProfileChange,
+    this.onConnectionChanged,
   });
+
+  static Future<void> _noProfileChange() async {}
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -29,15 +47,10 @@ class _ScanScreenState extends State<ScanScreen> {
   bool _selectedFileIsPdf = false;
   final ImagePicker _picker = ImagePicker();
   final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _serverUrlController = TextEditingController(
-    text: const String.fromEnvironment(
-      'MELODISCAN_API_URL',
-      defaultValue: 'http://10.0.2.2:8080',
-    ),
-  );
-  final TextEditingController _apiKeyController = TextEditingController(
-    text: const String.fromEnvironment('MELODISCAN_API_KEY'),
-  );
+  late final TextEditingController _serverUrlController =
+      TextEditingController(text: widget.initialServerUrl);
+  late final TextEditingController _apiKeyController =
+      TextEditingController(text: widget.initialApiKey);
 
   @override
   void dispose() {
@@ -136,6 +149,8 @@ class _ScanScreenState extends State<ScanScreen> {
           filename: fileName,
         ),
       );
+      request.fields['profile_id'] = widget.profileId;
+      await widget.onConnectionChanged?.call(serverUrl, apiKey);
 
       final streamedResponse =
           await client.send(request).timeout(const Duration(seconds: 30));
@@ -162,6 +177,7 @@ class _ScanScreenState extends State<ScanScreen> {
             title: title.isEmpty ? 'Analyse de la partition' : title,
             serverUrl: serverUrl,
             apiKey: apiKey,
+            profileId: widget.profileId,
             httpClient: client,
           ),
         ),
@@ -196,14 +212,21 @@ class _ScanScreenState extends State<ScanScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Row(
+        title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            MelodiScanLogo(size: 28),
-            SizedBox(width: 10),
-            Text('MelodiScan'),
+            const MelodiScanLogo(size: 28),
+            const SizedBox(width: 10),
+            Text('MelodiScan · ${widget.profileName}'),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Changer de profil',
+            onPressed: widget.onChangeProfile,
+            icon: const Icon(Icons.person_outline_rounded),
+          ),
+        ],
       ),
       body: MelodiScanBackground(
         child: SingleChildScrollView(

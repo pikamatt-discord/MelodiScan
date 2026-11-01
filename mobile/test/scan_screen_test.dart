@@ -13,7 +13,7 @@ void main() {
       ),
     );
 
-    expect(find.text('MelodiScan'), findsOneWidget);
+    expect(find.text('MelodiScan · Profil 1'), findsOneWidget);
     expect(find.text('Prendre en photo'), findsOneWidget);
     expect(find.text('Choisir une image'), findsOneWidget);
     expect(find.text('Importer un PDF'), findsOneWidget);

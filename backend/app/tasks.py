@@ -3,6 +3,8 @@ import logging
 import re
 from datetime import datetime, timezone
 from celery import Celery
+from app.gemini_title import GeminiTitleError, extract_score_title
+from app.library_store import save_completed_score
 from app.omr_engine import OMREngine, convert_musicxml_to_midi
 from app.score_metadata import analyze_musicxml_file
 
@@ -52,7 +54,7 @@ def _append_task_log(log_path: str | None, message: str) -> None:
 def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
     from app.main import TASK_FAILURE_SUMMARY, get_task_state, set_task_state
 
-    output_dir = "data/temp"
+    output_dir = os.getenv("MELODISCAN_TEMP_DIR", "data/temp")
     os.makedirs(output_dir, exist_ok=True)
 
     state = get_task_state(task_id) or {"task_id": task_id, "title": title}
@@ -74,12 +76,33 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
         ).process_score(score_path, output_dir, log_path)
 
         _append_task_log(log_path, f"MusicXML généré : {musicxml_path}")
-        score_metadata = analyze_musicxml_file(musicxml_path)
-        document_title = score_metadata.get("title")
         requested_title = (state.get("user_title") or title or "").strip()
+        try:
+            gemini_title = extract_score_title(score_path)
+        except GeminiTitleError as exc:
+            logger.warning(
+                "Could not extract a title with Gemini for task %s: %s",
+                task_id,
+                exc,
+            )
+            _append_task_log(
+                log_path,
+                "Gemini n’a pas pu extraire le titre ; poursuite avec le titre "
+                "saisi ou le titre générique.",
+            )
+            gemini_title = None
+        if gemini_title:
+            _append_task_log(log_path, "Titre de la partition extrait avec Gemini.")
+
+        score_metadata = analyze_musicxml_file(musicxml_path)
+        resolved_title = gemini_title or requested_title or "Partition sans titre"
+        score_metadata["title"] = resolved_title
+        score_metadata["title_source"] = (
+            "gemini" if gemini_title else "user" if requested_title else "default"
+        )
         state.update({
             "score_metadata": score_metadata,
-            "title": document_title or requested_title or "Partition sans titre",
+            "title": resolved_title,
         })
         set_task_state(task_id, state)
         state["status"] = "STATUS_BUILDING_MUSICXML"
@@ -91,10 +114,23 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
         midi_path = os.path.join(output_dir, f"{task_id}.mid")
         convert_musicxml_to_midi(musicxml_path, midi_path)
 
+        saved_score = save_completed_score(
+            task_id=task_id,
+            profile_id=state.get("profile_id", "profile-1"),
+            title=state["title"],
+            created_at=state.get("created_at")
+            or datetime.now(timezone.utc).isoformat(),
+            source_path=score_path,
+            midi_path=midi_path,
+            musicxml_path=musicxml_path,
+            score_metadata=score_metadata,
+        )
         state.update({
             "status": "STATUS_COMPLETED",
-            "musicxml_path": musicxml_path,
-            "midi_path": midi_path,
+            "profile_id": saved_score["profile_id"],
+            "musicxml_path": saved_score["musicxml_path"],
+            "midi_path": saved_score["midi_path"],
+            "source_path": saved_score["source_path"],
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "error": None,
         })

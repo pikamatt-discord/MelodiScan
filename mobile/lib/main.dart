@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'screens/scan_screen.dart';
+import 'package:http/http.dart' as http;
+
+import 'screens/profile_home.dart';
 
 void main() {
   runApp(const ProviderScope(child: MelodiScanApp()));
 }
 
 class MelodiScanApp extends StatelessWidget {
-  const MelodiScanApp({super.key});
+  const MelodiScanApp({super.key, this.httpClient});
+
+  final http.Client? httpClient;
 
   @override
   Widget build(BuildContext context) {
@@ -93,7 +97,7 @@ class MelodiScanApp extends StatelessWidget {
               displayColor: const Color(0xFFF4F1FA),
             ),
       ),
-      home: const ScanScreen(),
+      home: ProfileHome(httpClient: httpClient),
     );
   }
 }

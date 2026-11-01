@@ -22,9 +22,12 @@ PDF_BYTES = b"%PDF-1.7\nvalid-test-pdf"
 
 
 @pytest.fixture(autouse=True)
-def clear_local_tasks(monkeypatch):
+def clear_local_tasks(monkeypatch, tmp_path):
     main.LOCAL_TASKS_DB.clear()
     monkeypatch.setattr(main, "get_redis_client", lambda: None)
+    monkeypatch.setenv("MELODISCAN_TEMP_DIR", str(tmp_path / "temp"))
+    monkeypatch.setenv("MELODISCAN_LIBRARY_DIR", str(tmp_path / "library"))
+    monkeypatch.setenv("MELODISCAN_LIBRARY_DB", str(tmp_path / "library.sqlite3"))
     yield
     for task in main.LOCAL_TASKS_DB.values():
         for path_key in ("file_path", "logs_path"):
@@ -94,6 +97,7 @@ def test_scan_score_queues_valid_image(monkeypatch):
     assert data["status"] == "STATUS_QUEUED"
     task = get_task_state(data["task_id"])
     assert task["title"] == "Test Piece"
+    assert task["profile_id"] == "profile-1"
     assert Path(task["file_path"]).read_bytes() == PNG_BYTES
     assert "score.png" in Path(task["logs_path"]).read_text()
 
@@ -114,6 +118,40 @@ def test_scan_score_queues_pdf_document(monkeypatch):
     assert task["file_path"].endswith(".pdf")
     assert Path(task["file_path"]).read_bytes() == PDF_BYTES
     assert "score.pdf" in Path(task["logs_path"]).read_text()
+
+
+def test_profiles_are_created_and_renamed_from_dashboard():
+    response = client.get("/api/v1/profiles")
+
+    assert response.status_code == 200
+    profiles = response.json()["profiles"]
+    assert [profile["id"] for profile in profiles] == [
+        "profile-1",
+        "profile-2",
+        "profile-3",
+    ]
+
+    renamed = client.put(
+        "/api/v1/profiles/profile-2",
+        json={"name": "Camille"},
+    )
+
+    assert renamed.status_code == 200
+    assert renamed.json() == {"id": "profile-2", "name": "Camille"}
+    assert client.get("/dashboard/profiles").status_code == 200
+
+
+def test_scan_rejects_unknown_profile(monkeypatch):
+    from app.tasks import process_omr_task
+
+    monkeypatch.setattr(process_omr_task, "delay", lambda *_args: None)
+    response = client.post(
+        "/api/v1/scan",
+        files={"file": ("score.png", PNG_BYTES, "image/png")},
+        data={"profile_id": "missing-profile"},
+    )
+
+    assert response.status_code == 400
 
 
 def test_api_key_is_required_only_when_configured(monkeypatch):
@@ -583,17 +621,51 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
 
     monkeypatch.setattr("app.tasks.OMREngine.process_score", process_score)
     monkeypatch.setattr(
-        "app.tasks.convert_musicxml_to_midi",
-        lambda *_args: "successful-task.mid",
+        "app.tasks.extract_score_title",
+        lambda *_args: "Title from Gemini",
     )
+    def create_midi(_musicxml_path, midi_path):
+        Path(midi_path).write_bytes(b"MThd test midi")
+        return midi_path
+
+    monkeypatch.setattr("app.tasks.convert_musicxml_to_midi", create_midi)
 
     task = process_omr_task.run(
         "successful-log-task", str(input_path), "Successful score"
     )
 
     assert task["status"] == "STATUS_COMPLETED"
-    assert task["title"] == "Title from score"
+    assert task["title"] == "Title from Gemini"
+    assert task["score_metadata"]["title"] == "Title from Gemini"
+    assert task["score_metadata"]["title_source"] == "gemini"
     assert task["score_metadata"]["parts"][0]["name"] == "Flute"
+    assert Path(task["source_path"]).read_bytes() == PNG_BYTES
+    assert Path(task["midi_path"]).read_bytes() == b"MThd test midi"
+    library = client.get(
+        "/api/v1/library", params={"profile_id": task["profile_id"]}
+    )
+    assert library.status_code == 200
+    assert library.json()["items"][0]["task_id"] == task["task_id"]
+    source_response = client.get(
+        f"/api/v1/library/{task['task_id']}/source",
+        params={"profile_id": task["profile_id"]},
+    )
+    assert source_response.content == PNG_BYTES
+    assert client.get(
+        f"/api/v1/result/{task['task_id']}",
+        params={"profile_id": task["profile_id"]},
+    ).content == b"MThd test midi"
+    original_get_task_state = main.get_task_state
+    monkeypatch.setattr(main, "get_task_state", lambda _task_id: {})
+    assert client.get(
+        f"/api/v1/result/{task['task_id']}",
+        params={"profile_id": task["profile_id"]},
+    ).content == b"MThd test midi"
+    assert client.get(
+        f"/api/v1/result/{task['task_id']}",
+        params={"profile_id": "profile-2"},
+    ).status_code == 404
+    monkeypatch.setattr(main, "get_task_state", original_get_task_state)
     assert not input_path.exists()
     logs_response = client.get("/api/v1/tasks/successful-log-task/logs")
     logs = logs_response.json()["logs"]
@@ -601,6 +673,47 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
     assert full_audiveris_output in logs
     assert "Traitement terminé avec succès." in logs
     assert "Audiveris" not in (logs_response.json()["summary"] or "")
+
+
+def test_worker_does_not_use_musicxml_title_when_gemini_finds_no_title(
+    tmp_path, monkeypatch
+):
+    from app.tasks import process_omr_task
+
+    input_path = tmp_path / "score.png"
+    input_path.write_bytes(PNG_BYTES)
+    musicxml_path = tmp_path / "score.musicxml"
+    musicxml_path.write_text(
+        """<score-partwise>
+          <part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list>
+          <part id="P1"><measure number="1">
+            <note><rest/><duration>1</duration><type>quarter</type></note>
+          </measure></part>
+        </score-partwise>""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "app.tasks.OMREngine.process_score",
+        lambda *_args: str(musicxml_path),
+    )
+    monkeypatch.setattr(
+        "app.tasks.extract_score_title",
+        lambda *_args: None,
+    )
+    def create_midi(_musicxml_path, midi_path):
+        Path(midi_path).write_bytes(b"MThd test midi")
+        return midi_path
+
+    monkeypatch.setattr("app.tasks.convert_musicxml_to_midi", create_midi)
+
+    task = process_omr_task.run(
+        "gemini-empty-task", str(input_path), "Fallback title"
+    )
+
+    assert task["status"] == "STATUS_COMPLETED"
+    assert task["title"] == "Fallback title"
+    assert task["score_metadata"]["title"] == "Fallback title"
+    assert task["score_metadata"]["title_source"] == "user"
 
 
 def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path, monkeypatch):

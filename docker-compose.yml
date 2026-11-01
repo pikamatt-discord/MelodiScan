@@ -20,6 +20,7 @@ services:
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
     volumes:
       - ./data/temp:/app/data/temp
+      - ./data/library:/app/data/library
       - ./data/apk:/app/data/apk:ro
     depends_on:
       - melodiscan-redis
@@ -36,8 +37,10 @@ services:
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
       - AUDIVERIS_EXECUTABLE=${AUDIVERIS_EXECUTABLE:-audiveris}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       - ./data/temp:/app/data/temp
+      - ./data/library:/app/data/library
     depends_on:
       - melodiscan-redis
 

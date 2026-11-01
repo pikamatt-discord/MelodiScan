@@ -10,6 +10,7 @@ class StatusScreen extends StatefulWidget {
   final String title;
   final String serverUrl;
   final String apiKey;
+  final String? profileId;
   final http.Client? httpClient;
 
   const StatusScreen({
@@ -18,6 +19,7 @@ class StatusScreen extends StatefulWidget {
     required this.title,
     required this.serverUrl,
     this.apiKey = '',
+    this.profileId,
     this.httpClient,
   });
 
@@ -162,6 +164,7 @@ class _StatusScreenState extends State<StatusScreen> {
           title: _detectedTitle ?? widget.title,
           serverUrl: widget.serverUrl,
           apiKey: widget.apiKey,
+          profileId: widget.profileId,
           httpClient: widget.httpClient,
         ),
       ),
