@@ -303,7 +303,7 @@ class _ScoreSystemPainter extends CustomPainter {
         final staffTop = _staffTopFor(note.staff);
         final noteY = note.isRest
             ? staffTop + _lineGap
-            : _noteY(note, _displayClef(noteClef), staffTop);
+            : _noteY(note, noteClef, staffTop);
         final tieKey = (note.staff, note.step, note.octave, note.alter);
         if (note.ties.contains('stop')) {
           final tieStart = tieStarts.remove(tieKey);
@@ -374,9 +374,6 @@ class _ScoreSystemPainter extends CustomPainter {
       4 * _lineGap -
       (_diatonicStep(note.step, note.octave) - _bottomStep(clef)) *
           (_lineGap / 2);
-
-  ScoreClef _displayClef(ScoreClef clef) =>
-      clef == ScoreClef.percussion ? ScoreClef.treble : clef;
 
   void _drawTie(
     Canvas canvas,
@@ -498,7 +495,6 @@ class _ScoreSystemPainter extends CustomPainter {
     double staffTop,
     int staff,
   ) {
-    if (measure.clefForStaff(staff) == ScoreClef.percussion) return;
     final keyGlyph = measure.fifths > 0 ? '♯' : '♭';
     final keyCount = math.min(7, measure.fifths.abs());
     final keySteps =
@@ -547,8 +543,6 @@ class _ScoreSystemPainter extends CustomPainter {
   ) {
     final color =
         highlighted ? const Color(0xFFE53935) : const Color(0xFF171717);
-    final isPercussion = clef == ScoreClef.percussion;
-    final displayClef = _displayClef(clef);
     final notePaint = Paint()
       ..color = color
       ..strokeWidth = 1.5
@@ -579,18 +573,16 @@ class _ScoreSystemPainter extends CustomPainter {
     }
 
     final step = _diatonicStep(note.step, note.octave);
-    final staffPosition = step - _bottomStep(displayClef);
-    final y = _yForStep(step, displayClef, staffTop);
-    final keyAlter = isPercussion ? 0 : _keyAlter(note.step, fifths);
+    final staffPosition = step - _bottomStep(clef);
+    final y = _yForStep(step, clef, staffTop);
+    final keyAlter = _keyAlter(note.step, fifths);
     final accidentalKey = '${note.step}${note.octave}';
     final previousAlter = accidentalState[accidentalKey] ?? keyAlter;
-    final accidental = isPercussion
-        ? null
-        : note.accidental != null
-            ? _accidentalGlyph(note.accidental!, note.alter)
-            : note.alter == previousAlter
-                ? null
-                : _accidentalGlyph('', note.alter);
+    final accidental = note.accidental != null
+        ? _accidentalGlyph(note.accidental!, note.alter)
+        : note.alter == previousAlter
+            ? null
+            : _accidentalGlyph('', note.alter);
     accidentalState[accidentalKey] = note.alter;
     if (accidental != null) {
       _drawText(
@@ -610,38 +602,22 @@ class _ScoreSystemPainter extends CustomPainter {
       for (var ledger = firstLedger;
           staffPosition < 0 ? ledger >= lastLedger : ledger <= lastLedger;
           ledger += staffPosition < 0 ? -2 : 2) {
-        final ledgerY =
-            _yForStep(_bottomStep(displayClef) + ledger, displayClef, staffTop);
+        final ledgerY = _yForStep(_bottomStep(clef) + ledger, clef, staffTop);
         canvas.drawLine(
             Offset(x - 8, ledgerY), Offset(x + 8, ledgerY), notePaint);
       }
     }
 
     final hollow = note.noteType == 'whole' || note.noteType == 'half';
-    if (isPercussion) {
-      const half = 4.5;
-      canvas.drawLine(
-        Offset(x - half, y - half),
-        Offset(x + half, y + half),
-        notePaint..style = PaintingStyle.stroke,
-      );
-      canvas.drawLine(
-        Offset(x - half, y + half),
-        Offset(x + half, y - half),
-        notePaint,
-      );
-      notePaint.style = PaintingStyle.fill;
-    } else {
-      canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(-0.25);
-      canvas.drawOval(
-        Rect.fromCenter(center: Offset.zero, width: 13, height: 9),
-        notePaint..style = hollow ? PaintingStyle.stroke : PaintingStyle.fill,
-      );
-      canvas.restore();
-      notePaint.style = PaintingStyle.fill;
-    }
+    canvas.save();
+    canvas.translate(x, y);
+    canvas.rotate(-0.25);
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset.zero, width: 13, height: 9),
+      notePaint..style = hollow ? PaintingStyle.stroke : PaintingStyle.fill,
+    );
+    canvas.restore();
+    notePaint.style = PaintingStyle.fill;
 
     final isLong = note.noteType == 'whole';
     if (!isLong) {

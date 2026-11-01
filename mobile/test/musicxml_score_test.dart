@@ -48,43 +48,6 @@ void main() {
     expect(measure.notes[1].accidental, 'natural');
   });
 
-  test('recognizes percussion parts and keeps unpitched staff notes', () {
-    const musicXml = '''
-      <score-partwise>
-        <part-list>
-          <score-part id="P1">
-            <part-name>Ensemble</part-name>
-            <midi-instrument id="I1">
-              <midi-channel>10</midi-channel>
-              <midi-program>1</midi-program>
-            </midi-instrument>
-          </score-part>
-        </part-list>
-        <part id="P1">
-          <measure number="1">
-            <attributes>
-              <divisions>24</divisions>
-              <clef><sign>percussion</sign><line>2</line></clef>
-            </attributes>
-            <note>
-              <unpitched><display-step>F</display-step><display-octave>4</display-octave></unpitched>
-              <duration>24</duration><type>quarter</type>
-            </note>
-          </measure>
-        </part>
-      </score-partwise>
-    ''';
-
-    final score = MusicXmlScore.parse(musicXml, ticksPerBeat: 96);
-
-    expect(score.parts.single.isPercussion, isTrue);
-    expect(score.parts.single.instrumentProgram, 0);
-    expect(score.measures.single.clef, ScoreClef.percussion);
-    expect(score.measures.single.notes, hasLength(1));
-    expect(score.measures.single.notes.single.step, 'F');
-    expect(score.measures.single.notes.single.octave, 4);
-  });
-
   test('places chord tones together and advances backup voices correctly', () {
     const musicXml = '''
       <score-partwise>
@@ -248,43 +211,5 @@ void main() {
     expect(flute.hasGrandStaff, isFalse);
     expect(flute.measures, hasLength(2));
     expect(flute.tempoChanges.map((tempo) => tempo.bpm), [60, 90]);
-  });
-
-  test('reads printed credit title and measure-level sound tempos', () {
-    const musicXml = '''
-      <score-partwise>
-        <credit page="1">
-          <credit-type>title</credit-type>
-          <credit-words>Printed Score Title</credit-words>
-        </credit>
-        <credit page="1">
-          <credit-type>composer</credit-type>
-          <credit-words>Not the title</credit-words>
-        </credit>
-        <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
-        <part id="P1">
-          <measure number="1">
-            <attributes>
-              <divisions>24</divisions>
-              <time><beats>4</beats><beat-type>4</beat-type></time>
-            </attributes>
-            <sound tempo="96"/>
-            <note><pitch><step>C</step><octave>4</octave></pitch>
-              <duration>24</duration><type>quarter</type></note>
-          </measure>
-          <measure number="2">
-            <sound tempo="112"/>
-            <note><pitch><step>D</step><octave>4</octave></pitch>
-              <duration>24</duration><type>quarter</type></note>
-          </measure>
-        </part>
-      </score-partwise>
-    ''';
-
-    final score = MusicXmlScore.parse(musicXml, ticksPerBeat: 96);
-
-    expect(score.title, 'Printed Score Title');
-    expect(score.tempoChanges.map((tempo) => tempo.bpm), [96, 112]);
-    expect(score.tempoChanges.map((tempo) => tempo.tick), [0, 384]);
   });
 }

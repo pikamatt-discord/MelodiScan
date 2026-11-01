@@ -16,23 +16,17 @@ void main() {
       instrumentProgram: 73,
       tempoBpm: 88,
       volumePercent: 72,
-      followScoreInstrument: false,
-      followScoreTempo: false,
     );
 
     final initial = await MidiConfiguration.loadPreferences(fallback);
     expect(initial.instrumentProgram, fallback.instrumentProgram);
     expect(initial.tempoBpm, fallback.tempoBpm);
     expect(initial.volumePercent, fallback.volumePercent);
-    expect(initial.followScoreInstrument, isTrue);
-    expect(initial.followScoreTempo, isTrue);
     await MidiConfiguration.savePreferences(saved);
 
     final restored = await MidiConfiguration.loadPreferences(fallback);
     expect(restored.instrumentProgram, saved.instrumentProgram);
     expect(restored.tempoBpm, saved.tempoBpm);
     expect(restored.volumePercent, saved.volumePercent);
-    expect(restored.followScoreInstrument, isFalse);
-    expect(restored.followScoreTempo, isFalse);
   });
 }

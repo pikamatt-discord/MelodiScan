@@ -97,17 +97,19 @@ class _StatusScreenState extends State<StatusScreen> {
       }
 
       final status = data['status'];
+      final title = data['title'];
       final scoreMetadata = data['score_metadata'];
-      if (scoreMetadata is Map<String, dynamic>) {
-        final scoreTitle = scoreMetadata['title'];
-        if (mounted) {
-          setState(() {
-            if (scoreTitle is String && scoreTitle.trim().isNotEmpty) {
-              _detectedTitle = scoreTitle.trim();
-            }
+      if (mounted &&
+          ((title is String && title.trim().isNotEmpty) ||
+              scoreMetadata is Map<String, dynamic>)) {
+        setState(() {
+          if (title is String && title.trim().isNotEmpty) {
+            _detectedTitle = title.trim();
+          }
+          if (scoreMetadata is Map<String, dynamic>) {
             _scoreMetadata = scoreMetadata;
-          });
-        }
+          }
+        });
       }
       if (status == 'STATUS_FAILED') {
         final error = data['error'];
@@ -585,15 +587,6 @@ class _StatusScreenState extends State<StatusScreen> {
     final partEntries = parts is List ? parts.whereType<Map>().toList() : [];
     final partNames =
         partEntries.map((part) => part['name']).whereType<String>().toList();
-    final instruments = partEntries
-        .map((part) {
-          if (part['is_percussion'] == true) return 'Percussions';
-          final name = part['instrument_name'];
-          return name is String && name.trim().isNotEmpty ? name.trim() : null;
-        })
-        .whereType<String>()
-        .toSet()
-        .toList();
     final creators = metadata['creators'];
     final creatorLabels = creators is List
         ? creators
@@ -620,7 +613,6 @@ class _StatusScreenState extends State<StatusScreen> {
     final details = <String>[
       if (measureCount is num && measureCount > 0) '$measureCount mesures',
       if (partNames.isNotEmpty) partNames.join(' · '),
-      if (instruments.isNotEmpty) 'Instruments : ${instruments.join(' · ')}',
       if (creatorLabels.isNotEmpty) creatorLabels.join(' · '),
       if (signature.isNotEmpty) signature.join(' · '),
       if (firstTempo is num) '${firstTempo.round()} BPM détectés',

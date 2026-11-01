@@ -156,51 +156,10 @@ Uint8List _multiTrackMidiBytes() => Uint8List.fromList(
       ),
     );
 
-Uint8List _reversedNamedMultiTrackMidiBytes() => Uint8List.fromList(
-      MidiWriter().writeMidiToBuffer(
-        MidiFile(
-          [
-            [
-              TrackNameEvent()
-                ..type = 'trackName'
-                ..text = 'P2',
-              NoteOnEvent()
-                ..channel = 1
-                ..noteNumber = 48
-                ..velocity = 80,
-              NoteOffEvent()
-                ..deltaTime = 96
-                ..channel = 1
-                ..noteNumber = 48,
-              EndOfTrackEvent(),
-            ],
-            [
-              TrackNameEvent()
-                ..type = 'trackName'
-                ..text = 'P1',
-              NoteOnEvent()
-                ..channel = 0
-                ..noteNumber = 72
-                ..velocity = 90,
-              NoteOffEvent()
-                ..deltaTime = 96
-                ..channel = 0
-                ..noteNumber = 72,
-              EndOfTrackEvent(),
-            ],
-          ],
-          MidiHeader(format: 1, numTracks: 2, ticksPerBeat: 96),
-        ),
-      ),
-    );
-
 const validMusicXml = '''
 <?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
-  <credit page="1">
-    <credit-type>title</credit-type>
-    <credit-words>Étude depuis le document</credit-words>
-  </credit>
+  <work><work-title>Étude depuis le document</work-title></work>
   <identification>
     <creator type="composer">Compositrice du document</creator>
   </identification>
@@ -300,7 +259,6 @@ void main() {
 
     expect(wholeScore.trackCount, 2);
     expect(wholeScore.notes.map((note) => note.pitch), [72, 48]);
-    expect(wholeScore.trackNames, ['Flute', 'Piano']);
     expect(piano.trackCount, 2);
     expect(piano.notes.map((note) => note.pitch), [48]);
     expect(piano.totalTicks, wholeScore.totalTicks);
@@ -322,8 +280,6 @@ void main() {
         instrumentProgram: 73,
         tempoBpm: 90,
         volumePercent: 50,
-        followScoreInstrument: false,
-        followScoreTempo: false,
       ),
     );
     final midi = MidiParser().parseMidiFromBuffer(configured);
@@ -381,7 +337,6 @@ void main() {
           instrumentProgram: 0,
           tempoBpm: 90,
           volumePercent: 100,
-          followScoreTempo: false,
         ),
       ),
     );
@@ -446,7 +401,7 @@ void main() {
 
     expect(find.text('Symphonie No. 5'), findsOneWidget);
     expect(find.text('Étude depuis le document'), findsOneWidget);
-    expect(find.textContaining('Instrument non identifié'), findsOneWidget);
+    expect(find.textContaining('Acoustic Grand Piano'), findsOneWidget);
     expect(find.text('Partition'), findsOneWidget);
     expect(find.byKey(const Key('traditional_score_view')), findsOneWidget);
     expect(find.text('Mesure'), findsOneWidget);
@@ -520,29 +475,8 @@ void main() {
     expect(find.text('Configuration du lecteur'), findsOneWidget);
     expect(find.byKey(const Key('instrument_selector')), findsOneWidget);
     expect(find.byKey(const Key('tempo_slider')), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('volume_slider')),
-      300,
-    );
     expect(find.byKey(const Key('volume_slider')), findsOneWidget);
     expect(GeneralMidiInstrument.all, hasLength(128));
-
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('follow_score_instrument')),
-      -300,
-    );
-    await tester.tap(find.byKey(const Key('follow_score_instrument')));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('follow_score_tempo')),
-      300,
-    );
-    await tester.tap(find.byKey(const Key('follow_score_tempo')));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('instrument_selector')),
-      -300,
-    );
 
     await tester.tap(find.byKey(const Key('test_audio_button')));
     await tester.pumpAndSettle();
@@ -603,7 +537,7 @@ void main() {
 
   testWidgets('Selecting a part aligns the score, piano roll, and playback',
       (tester) async {
-    final midiBytes = _reversedNamedMultiTrackMidiBytes();
+    final midiBytes = _multiTrackMidiBytes();
     final client = MockClient((request) async {
       if (request.url.path.endsWith('/musicxml')) {
         return http.Response(
@@ -633,7 +567,7 @@ void main() {
         find.byKey(const Key('score_part_selector')));
     expect(partSelector.value, 'P2');
     expect(
-      MidiVisualization.parse(midiBytes, trackIndex: 0).notes.single.pitch,
+      MidiVisualization.parse(midiBytes, trackIndex: 1).notes.single.pitch,
       48,
     );
 
@@ -698,7 +632,7 @@ void main() {
     expect(find.text('Compositrice du document'), findsOneWidget);
     expect(find.text('composer'), findsOneWidget);
     expect(find.text('1 bémol  ·  4/4'), findsOneWidget);
-    expect(find.textContaining('2 portées'), findsOneWidget);
+    expect(find.text('2 portées'), findsOneWidget);
     expect(find.text('Titre lu dans le document'), findsOneWidget);
   });
 

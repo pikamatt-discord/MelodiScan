@@ -142,31 +142,6 @@ class GeneralMidiInstrument {
 
   static GeneralMidiInstrument byProgram(int program) =>
       all.firstWhere((instrument) => instrument.program == program);
-
-  static int? programForName(String name) {
-    final normalized = name.trim().toLowerCase();
-    if (normalized.isEmpty ||
-        normalized.contains('percussion') ||
-        normalized.contains('drum') ||
-        normalized.contains('batterie')) {
-      return null;
-    }
-    for (final instrument in all) {
-      if (instrument.name.toLowerCase() == normalized) {
-        return instrument.program;
-      }
-    }
-    return switch (normalized) {
-      'piano' => 0,
-      'electric piano' => 4,
-      'organ' => 19,
-      'guitar' => 24,
-      'bass' => 32,
-      'strings' => 48,
-      'voice' => 52,
-      _ => null,
-    };
-  }
 }
 
 class MidiPlayerConfiguration {
@@ -174,15 +149,11 @@ class MidiPlayerConfiguration {
     required this.instrumentProgram,
     required this.tempoBpm,
     required this.volumePercent,
-    this.followScoreInstrument = true,
-    this.followScoreTempo = true,
   });
 
   final int instrumentProgram;
   final int tempoBpm;
   final int volumePercent;
-  final bool followScoreInstrument;
-  final bool followScoreTempo;
 }
 
 class MidiConfiguration {
@@ -190,8 +161,6 @@ class MidiConfiguration {
   static const _instrumentPreference = 'player.instrument_program';
   static const _tempoPreference = 'player.tempo_bpm';
   static const _volumePreference = 'player.volume_percent';
-  static const _followInstrumentPreference = 'player.follow_score_instrument';
-  static const _followTempoPreference = 'player.follow_score_tempo';
 
   static MidiPlayerConfiguration defaultsFor(Uint8List bytes) {
     final midi = MidiParser().parseMidiFromBuffer(bytes);
@@ -241,9 +210,6 @@ class MidiConfiguration {
           (preferences.getInt(_volumePreference) ?? fallback.volumePercent)
               .clamp(0, 100)
               .toInt(),
-      followScoreInstrument:
-          preferences.getBool(_followInstrumentPreference) ?? true,
-      followScoreTempo: preferences.getBool(_followTempoPreference) ?? true,
     );
   }
 
@@ -263,19 +229,7 @@ class MidiConfiguration {
       _volumePreference,
       configuration.volumePercent,
     );
-    final savedFollowInstrument = await preferences.setBool(
-      _followInstrumentPreference,
-      configuration.followScoreInstrument,
-    );
-    final savedFollowTempo = await preferences.setBool(
-      _followTempoPreference,
-      configuration.followScoreTempo,
-    );
-    if (!savedInstrument ||
-        !savedTempo ||
-        !savedVolume ||
-        !savedFollowInstrument ||
-        !savedFollowTempo) {
+    if (!savedInstrument || !savedTempo || !savedVolume) {
       throw StateError('Impossible d’enregistrer la configuration du lecteur.');
     }
   }
@@ -284,7 +238,6 @@ class MidiConfiguration {
     Uint8List bytes,
     MidiPlayerConfiguration configuration, {
     int? selectedTrackIndex,
-    int? detectedInstrumentProgram,
   }) {
     final midi = MidiParser().parseMidiFromBuffer(bytes);
     if (midi.tracks.isEmpty) {
@@ -301,12 +254,9 @@ class MidiConfiguration {
     }
 
     final defaults = defaultsFor(bytes);
-    if ((configuration.followScoreInstrument ||
-            configuration.instrumentProgram == defaults.instrumentProgram) &&
-        (configuration.followScoreTempo ||
-            configuration.tempoBpm == defaults.tempoBpm) &&
+    if (configuration.instrumentProgram == defaults.instrumentProgram &&
+        configuration.tempoBpm == defaults.tempoBpm &&
         configuration.volumePercent == 100 &&
-        detectedInstrumentProgram == null &&
         (selectedTrackIndex == null ||
             midi.tracks.length == 1 && selectedTrackIndex == 0)) {
       return bytes;
@@ -340,24 +290,22 @@ class MidiConfiguration {
       }
     }
 
-    if (!configuration.followScoreTempo) {
-      final targetTempo =
-          (_microsecondsPerMinute / configuration.tempoBpm).round();
-      for (final event in tempoEvents) {
-        event.microsecondsPerBeat =
-            (event.microsecondsPerBeat * targetTempo / initialTempo)
-                .round()
-                .clamp(1, 0xffffff)
-                .toInt();
-      }
-      if (!hasTempoAtStart) {
-        midi.tracks.first.insert(
-          0,
-          SetTempoEvent()
-            ..type = 'setTempo'
-            ..microsecondsPerBeat = targetTempo,
-        );
-      }
+    final targetTempo =
+        (_microsecondsPerMinute / configuration.tempoBpm).round();
+    for (final event in tempoEvents) {
+      event.microsecondsPerBeat =
+          (event.microsecondsPerBeat * targetTempo / initialTempo)
+              .round()
+              .clamp(1, 0xffffff)
+              .toInt();
+    }
+    if (!hasTempoAtStart) {
+      midi.tracks.first.insert(
+        0,
+        SetTempoEvent()
+          ..type = 'setTempo'
+          ..microsecondsPerBeat = targetTempo,
+      );
     }
 
     final volumeScale = configuration.volumePercent / 100;
@@ -386,8 +334,7 @@ class MidiConfiguration {
 
       final channels = channelsByTrack[trackIndex] ?? const <int>{};
       for (final event in track) {
-        if (!configuration.followScoreInstrument &&
-            event is ProgramChangeMidiEvent &&
+        if (event is ProgramChangeMidiEvent &&
             noteChannels.contains(event.channel) &&
             event.channel != 9) {
           event.programNumber = configuration.instrumentProgram;
@@ -400,24 +347,11 @@ class MidiConfiguration {
       }
 
       for (final channel in channels) {
-        if (!configuration.followScoreInstrument && channel != 9) {
+        if (channel != 9) {
           final program = ProgramChangeMidiEvent()
             ..type = 'programChange'
             ..channel = channel
             ..programNumber = configuration.instrumentProgram;
-          track.insert(0, program);
-        } else if (configuration.followScoreInstrument &&
-            detectedInstrumentProgram != null &&
-            channel != 9 &&
-            !track.any(
-              (event) =>
-                  event is ProgramChangeMidiEvent &&
-                  event.channel == channel,
-            )) {
-          final program = ProgramChangeMidiEvent()
-            ..type = 'programChange'
-            ..channel = channel
-            ..programNumber = detectedInstrumentProgram;
           track.insert(0, program);
         }
         final volume = ControllerEvent()
