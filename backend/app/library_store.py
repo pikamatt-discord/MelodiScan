@@ -198,3 +198,35 @@ def get_saved_score(task_id: str, profile_id: str | None = None) -> dict | None:
         item = dict(row)
         item["score_metadata"] = json.loads(item["score_metadata"])
         return item
+
+
+def delete_saved_score(task_id: str, profile_id: str) -> bool:
+    initialize_library()
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT source_path, midi_path, musicxml_path "
+            "FROM saved_scores WHERE task_id = ? AND profile_id = ?",
+            (task_id, profile_id),
+        ).fetchone()
+        if row is None:
+            return False
+
+        score_dir = Path(row["source_path"]).parent.resolve()
+        scores_dir = (_library_dir() / "scores").resolve()
+        if score_dir.parent != scores_dir:
+            raise ValueError("Saved score path is outside the library.")
+        if any(Path(row[key]).parent.resolve() != score_dir for key in (
+            "source_path",
+            "midi_path",
+            "musicxml_path",
+        )):
+            raise ValueError("Saved score files do not share the expected directory.")
+
+        connection.execute(
+            "DELETE FROM saved_scores WHERE task_id = ? AND profile_id = ?",
+            (task_id, profile_id),
+        )
+
+    if score_dir.exists():
+        shutil.rmtree(score_dir)
+    return True

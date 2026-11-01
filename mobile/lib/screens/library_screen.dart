@@ -34,6 +34,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String? _error;
   List<Map<String, dynamic>> _items = const [];
   bool _sortByTitle = false;
+  final Set<String> _deletingTaskIds = {};
 
   @override
   void initState() {
@@ -197,6 +198,77 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  Future<void> _confirmDeleteScore(Map<String, dynamic> item) async {
+    final title = item['title'] as String;
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.delete_outline_rounded),
+        title: const Text('Supprimer cette partition ?'),
+        content: Text(
+          '« $title » et ses fichiers enregistrés seront supprimés '
+          'définitivement.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirm_delete_score'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (shouldDelete == true && mounted) {
+      await _deleteScore(item);
+    }
+  }
+
+  Future<void> _deleteScore(Map<String, dynamic> item) async {
+    final taskId = item['task_id'] as String;
+    final client = widget.httpClient ?? createApiClient();
+    setState(() => _deletingTaskIds.add(taskId));
+    try {
+      final uri = Uri.parse(
+        '${widget.serverUrl}/api/v1/library/$taskId',
+      ).replace(queryParameters: {'profile_id': widget.profile.id});
+      final response = await client
+          .delete(
+            uri,
+            headers:
+                widget.apiKey.isEmpty ? null : {'X-API-Key': widget.apiKey},
+          )
+          .timeout(const Duration(seconds: 20));
+      if (response.statusCode != 204) {
+        throw StateError(_responseError(response));
+      }
+      if (!mounted) return;
+      setState(() {
+        _items = _items.where((saved) => saved['task_id'] != taskId).toList();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('« ${item['title']} » a été supprimée.')),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Suppression impossible : '
+              '${error.toString().replaceFirst('Bad state: ', '')}',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _deletingTaskIds.remove(taskId));
+      if (widget.httpClient == null) client.close();
+    }
+  }
+
   Widget _buildHistoryContent(ThemeData theme) {
     final visibleItems = _visibleItems;
     return Column(
@@ -296,15 +368,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
               const SizedBox(height: 14),
               Row(
                 children: [
-                  Text(
-                    'MES PARTITIONS',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: Colors.white60,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.1,
+                  Expanded(
+                    child: Text(
+                      'MES PARTITIONS',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: Colors.white60,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                      ),
                     ),
                   ),
-                  const Spacer(),
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -498,6 +573,33 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                   Icons.play_arrow_rounded,
                                   color: theme.colorScheme.primary,
                                 ),
+                              ),
+                              const SizedBox(width: 2),
+                              IconButton(
+                                key: Key('delete_score_${item['task_id']}'),
+                                tooltip: 'Supprimer cette partition',
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 36,
+                                  height: 36,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed:
+                                    _deletingTaskIds.contains(item['task_id'])
+                                        ? null
+                                        : () => _confirmDeleteScore(item),
+                                icon: _deletingTaskIds.contains(item['task_id'])
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.delete_outline_rounded,
+                                        size: 20,
+                                      ),
                               ),
                             ],
                           ),

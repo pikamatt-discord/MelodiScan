@@ -46,7 +46,6 @@ class _ScanScreenState extends State<ScanScreen> {
   String? _selectedFileName;
   bool _selectedFileIsPdf = false;
   final ImagePicker _picker = ImagePicker();
-  final TextEditingController _titleController = TextEditingController();
   late final TextEditingController _serverUrlController =
       TextEditingController(text: widget.initialServerUrl);
   late final TextEditingController _apiKeyController =
@@ -54,7 +53,6 @@ class _ScanScreenState extends State<ScanScreen> {
 
   @override
   void dispose() {
-    _titleController.dispose();
     _serverUrlController.dispose();
     _apiKeyController.dispose();
     super.dispose();
@@ -116,7 +114,6 @@ class _ScanScreenState extends State<ScanScreen> {
       return;
     }
 
-    final title = _titleController.text.trim();
     final serverUrl =
         _serverUrlController.text.trim().replaceFirst(RegExp(r'/+$'), '');
     final parsedServerUrl = Uri.tryParse(serverUrl);
@@ -136,7 +133,7 @@ class _ScanScreenState extends State<ScanScreen> {
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('$serverUrl/api/v1/scan'),
-      )..fields['title'] = title;
+      );
       final apiKey = _apiKeyController.text.trim();
       if (apiKey.isNotEmpty) {
         request.headers['X-API-Key'] = apiKey;
@@ -174,7 +171,7 @@ class _ScanScreenState extends State<ScanScreen> {
         MaterialPageRoute(
           builder: (_) => StatusScreen(
             taskId: body['task_id'] as String,
-            title: title.isEmpty ? 'Analyse de la partition' : title,
+            title: 'Analyse de la partition',
             serverUrl: serverUrl,
             apiKey: apiKey,
             profileId: widget.profileId,
@@ -213,11 +210,20 @@ class _ScanScreenState extends State<ScanScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Row(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: MainAxisSize.max,
           children: [
-            const MelodiScanLogo(size: 28),
+            const MelodiScanLogo(
+              key: Key('melodiscan_app_bar_logo'),
+              size: 34,
+            ),
             const SizedBox(width: 10),
-            Text('MelodiScan · ${widget.profileName}'),
+            Expanded(
+              child: Text(
+                'MelodiScan · ${widget.profileName}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
         actions: [
@@ -235,46 +241,73 @@ class _ScanScreenState extends State<ScanScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
-                padding: const EdgeInsets.all(18),
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      theme.colorScheme.primary.withValues(alpha: 0.22),
-                      theme.colorScheme.surface,
+                      theme.colorScheme.primary.withValues(alpha: 0.26),
+                      theme.colorScheme.surface.withValues(alpha: 0.96),
                     ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(24),
                   border: Border.all(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                    color: theme.colorScheme.primary.withValues(alpha: 0.22),
+                  ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    Text(
-                      'Votre partition, prête à écouter.',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'ESPACE DE NUMÉRISATION',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.secondary,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.3,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Donnez vie à\nvotre partition',
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              height: 1.12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Scannez-la pour la lire et l’écouter.',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: Colors.white70,
+                              height: 1.35,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Photographiez-la ou importez un PDF ou une image pour démarrer.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: Colors.white70,
-                        height: 1.4,
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        color:
+                            theme.colorScheme.primary.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(19),
+                      ),
+                      child: Icon(
+                        Icons.document_scanner_rounded,
+                        size: 29,
+                        color: theme.colorScheme.primary,
                       ),
                     ),
                   ],
                 ),
               ),
-              const _ScanSectionHeading(
-                icon: Icons.library_music_rounded,
-                title: 'Choisissez une partition',
-                subtitle: 'Prenez une photo, ou importez une image ou un PDF.',
-              ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 18),
               Row(
                 children: [
                   Expanded(
@@ -389,8 +422,7 @@ class _ScanScreenState extends State<ScanScreen> {
                       color: theme.colorScheme.primary,
                     ),
                     title: const Text('Réglages avancés'),
-                    subtitle:
-                        const Text('Serveur, clé API et titre du morceau'),
+                    subtitle: const Text('Serveur et clé API'),
                     childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
                     children: [
                       TextField(
@@ -414,16 +446,6 @@ class _ScanScreenState extends State<ScanScreen> {
                           prefixIcon: Icon(Icons.key_rounded),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _titleController,
-                        decoration: const InputDecoration(
-                          labelText: 'Titre (facultatif)',
-                          helperText:
-                              'Utilisé seulement si aucun titre n’est présent dans la partition.',
-                          prefixIcon: Icon(Icons.music_note_rounded),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -432,47 +454,6 @@ class _ScanScreenState extends State<ScanScreen> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _ScanSectionHeading extends StatelessWidget {
-  const _ScanSectionHeading({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: theme.colorScheme.primary),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                subtitle,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.white54,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

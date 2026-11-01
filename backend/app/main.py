@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 import redis
 from app.library_store import (
     DEFAULT_PROFILES,
+    delete_saved_score,
     get_profile,
     get_saved_score,
     list_profiles,
@@ -1049,6 +1050,25 @@ async def get_saved_source(
         media_type=media_type,
         headers={"Content-Disposition": "inline"},
     )
+
+
+@app.delete("/api/v1/library/{task_id}", status_code=204)
+async def delete_library_score(
+    task_id: str, profile_id: str = Query(..., min_length=1)
+):
+    try:
+        deleted = delete_saved_score(task_id, profile_id)
+    except OSError as exc:
+        logger.exception("Could not remove saved score files for task %s.", task_id)
+        raise HTTPException(
+            status_code=500,
+            detail="The score record was removed, but its files could not be fully deleted.",
+        ) from exc
+    except ValueError as exc:
+        logger.exception("Invalid saved score paths for task %s.", task_id)
+        raise HTTPException(status_code=500, detail="Saved score files are invalid.") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Saved score not found.")
 
 
 @app.get("/api/v1/stream/{task_id}")

@@ -20,6 +20,8 @@ void main() {
     expect(find.text('Une image par traitement'), findsNothing);
     expect(find.text('Binarisation Sauvola'), findsNothing);
     expect(find.text('Galerie (Multi)'), findsNothing);
+    expect(find.text('Choisissez une partition'), findsNothing);
+    expect(find.text('Donnez vie à\nvotre partition'), findsOneWidget);
 
     expect(find.text('Aucun fichier sélectionné'), findsNothing);
     expect(find.text('Analyser la partition'), findsOneWidget);
@@ -39,5 +41,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('URL du serveur'), findsOneWidget);
     expect(find.text('Clé API (si configurée sur le serveur)'), findsOneWidget);
+    expect(find.text('Titre (facultatif)'), findsNothing);
+    expect(find.text('Serveur, clé API et titre du morceau'), findsNothing);
   });
 }

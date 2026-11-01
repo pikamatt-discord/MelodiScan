@@ -11,11 +11,14 @@ class MelodiScanLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SvgPicture.asset(
-      'assets/images/melodiscan_logo.svg',
-      width: size,
-      height: size,
-      semanticsLabel: 'Logo MelodiScan',
+    return SizedBox.square(
+      dimension: size,
+      child: SvgPicture.asset(
+        'assets/images/melodiscan_logo.svg',
+        fit: BoxFit.contain,
+        alignment: Alignment.center,
+        semanticsLabel: 'Logo MelodiScan',
+      ),
     );
   }
 }

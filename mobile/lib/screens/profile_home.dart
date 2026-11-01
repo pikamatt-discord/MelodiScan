@@ -275,72 +275,222 @@ class _ProfilePicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Qui utilise MelodiScan ?')),
+      appBar: AppBar(title: const Text('Sélection du profil')),
       body: MelodiScanBackground(
         child: ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
           children: [
-            Text(
-              'Choisissez votre profil',
-              style: theme.textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Vos partitions seront rangées dans la bibliothèque de ce profil.',
-              style:
-                  theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
-            ),
-            const SizedBox(height: 24),
-            if (error != null) ...[
-              Text(error!, style: TextStyle(color: theme.colorScheme.error)),
-              const SizedBox(height: 12),
-            ],
-            for (final profile in profiles)
-              Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor:
-                        theme.colorScheme.primary.withValues(alpha: 0.18),
-                    child: Icon(Icons.person_rounded,
-                        color: theme.colorScheme.primary),
-                  ),
-                  title: Text(profile.name),
-                  trailing: const Icon(Icons.arrow_forward_rounded),
-                  onTap: () => onSelect(profile),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    theme.colorScheme.primary.withValues(alpha: 0.26),
+                    theme.colorScheme.surface.withValues(alpha: 0.96),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.22),
                 ),
               ),
-            if (profiles.isEmpty || error != null) ...[
-              const SizedBox(height: 12),
-              ExpansionTile(
-                title: const Text('Connexion au serveur'),
-                initiallyExpanded: profiles.isEmpty,
-                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Row(
                 children: [
-                  TextField(
-                    controller: serverController,
-                    keyboardType: TextInputType.url,
-                    decoration: const InputDecoration(
-                      labelText: 'URL du serveur',
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'VOTRE ESPACE MUSICAL',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.secondary,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Qui utilise\nMelodiScan ?',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            height: 1.12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Choisissez un profil pour retrouver vos partitions.',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: Colors.white70,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: apiKeyController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Clé API du serveur (si configurée)',
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(19),
+                    ),
+                    child: Icon(
+                      Icons.people_alt_rounded,
+                      size: 29,
+                      color: theme.colorScheme.primary,
                     ),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 22),
+            Text(
+              'CHOISIR UN PROFIL',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: Colors.white60,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (error != null) ...[
+              Card(
+                color: theme.colorScheme.error.withValues(alpha: 0.12),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.error_outline_rounded,
+                        color: theme.colorScheme.error,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          error!,
+                          style: TextStyle(color: theme.colorScheme.error),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            for (final profile in profiles) ...[
+              Card(
+                key: Key('profile_card_${profile.id}'),
+                margin: EdgeInsets.zero,
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: isLoading ? null : () => onSelect(profile),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 15,
+                      vertical: 13,
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: Icon(
+                            Icons.person_rounded,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text(
+                            profile.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(
+                          Icons.arrow_forward_rounded,
+                          color: theme.colorScheme.secondary,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            if (profiles.isEmpty || error != null) ...[
+              const SizedBox(height: 4),
+              Card(
+                margin: EdgeInsets.zero,
+                clipBehavior: Clip.antiAlias,
+                child: Theme(
+                  data: theme.copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    leading: Icon(
+                      Icons.dns_rounded,
+                      color: theme.colorScheme.primary,
+                    ),
+                    title: const Text('Connexion au serveur'),
+                    subtitle: const Text('Adresse et clé API'),
+                    initiallyExpanded: profiles.isEmpty,
+                    childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    children: [
+                      TextField(
+                        controller: serverController,
+                        keyboardType: TextInputType.url,
+                        decoration: const InputDecoration(
+                          labelText: 'URL du serveur',
+                          prefixIcon: Icon(Icons.link_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: apiKeyController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Clé API du serveur (si configurée)',
+                          prefixIcon: Icon(Icons.key_rounded),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: isLoading ? null : onRefresh,
                 icon: const Icon(Icons.refresh_rounded),
                 label: const Text('Réessayer'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
               ),
             ],
+            if (profiles.isEmpty && error == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 28),
+                child: Center(
+                  child: CircularProgressIndicator(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
           ],
         ),
       ),

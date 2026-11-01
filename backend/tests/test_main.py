@@ -716,6 +716,51 @@ def test_worker_does_not_use_musicxml_title_when_gemini_finds_no_title(
     assert task["score_metadata"]["title_source"] == "user"
 
 
+def test_library_score_can_only_be_deleted_by_its_profile(tmp_path):
+    from app.library_store import save_completed_score
+
+    source_path = tmp_path / "source.png"
+    midi_path = tmp_path / "score.mid"
+    musicxml_path = tmp_path / "score.musicxml"
+    source_path.write_bytes(PNG_BYTES)
+    midi_path.write_bytes(b"MThd test midi")
+    musicxml_path.write_text("<score-partwise />", encoding="utf-8")
+    task_id = "delete-test-score"
+
+    saved_score = save_completed_score(
+        task_id=task_id,
+        profile_id="profile-1",
+        title="Partition à supprimer",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        source_path=str(source_path),
+        midi_path=str(midi_path),
+        musicxml_path=str(musicxml_path),
+        score_metadata={},
+    )
+    saved_directory = Path(saved_score["source_path"]).parent
+
+    unauthorized = client.delete(
+        f"/api/v1/library/{task_id}",
+        params={"profile_id": "profile-2"},
+    )
+    assert unauthorized.status_code == 404
+    assert saved_directory.is_dir()
+
+    deleted = client.delete(
+        f"/api/v1/library/{task_id}",
+        params={"profile_id": "profile-1"},
+    )
+    assert deleted.status_code == 204
+    assert not saved_directory.exists()
+    assert client.get(
+        "/api/v1/library", params={"profile_id": "profile-1"}
+    ).json()["items"] == []
+    assert client.delete(
+        f"/api/v1/library/{task_id}",
+        params={"profile_id": "profile-1"},
+    ).status_code == 404
+
+
 def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path, monkeypatch):
     partitura = ModuleType("partitura")
 
