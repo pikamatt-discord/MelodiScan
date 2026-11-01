@@ -178,13 +178,15 @@ def test_dashboard_requires_credentials_when_configured(monkeypatch):
     monkeypatch.setattr(main, "DASHBOARD_PASSWORD", "dashboard-test-password")
     monkeypatch.setattr(main, "API_KEY", "local-test-key")
 
-    assert client.get("/dashboard").status_code == 401
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=%2Fdashboard"
     response = client.get(
         "/dashboard",
         auth=("admin", "dashboard-test-password"),
     )
     assert response.status_code == 200
-    assert client.get("/dashboard/logs").status_code == 401
+    assert client.get("/dashboard/logs", follow_redirects=False).status_code == 303
     assert client.get(
         "/dashboard/logs",
         auth=("admin", "dashboard-test-password"),
@@ -194,6 +196,38 @@ def test_dashboard_requires_credentials_when_configured(monkeypatch):
         "/api/v1/stats",
         auth=("admin", "dashboard-test-password"),
     ).status_code == 200
+
+
+def test_dashboard_login_creates_private_session_and_logout_revokes_it(monkeypatch):
+    monkeypatch.setattr(main, "DASHBOARD_USERNAME", "admin")
+    monkeypatch.setattr(main, "DASHBOARD_PASSWORD", "dashboard-test-password")
+    monkeypatch.setattr(main, "API_KEY", "local-test-key")
+
+    with TestClient(app) as auth_client:
+        login_page = auth_client.get("/login")
+        stylesheet = auth_client.get("/assets/dashboard.css")
+        rejected = auth_client.post(
+            "/auth/login",
+            data={"username": "admin", "password": "wrong-password"},
+        )
+        accepted = auth_client.post(
+            "/auth/login",
+            data={"username": "admin", "password": "dashboard-test-password", "next": "//example.com"},
+        )
+
+        assert login_page.status_code == 200
+        assert 'id="login-form"' in login_page.text
+        assert stylesheet.status_code == 200
+        assert ".topbar" in stylesheet.text
+        assert rejected.status_code == 401
+        assert accepted.status_code == 200
+        assert accepted.json()["redirect_url"] == "/dashboard"
+        assert accepted.cookies[main.DASHBOARD_SESSION_COOKIE]
+        assert "httponly" in accepted.headers["set-cookie"].lower()
+        assert auth_client.get("/dashboard").status_code == 200
+        assert auth_client.get("/api/v1/stats").status_code == 200
+        assert auth_client.post("/logout", follow_redirects=False).status_code == 303
+        assert auth_client.get("/dashboard", follow_redirects=False).status_code == 303
 
 
 def test_dashboard_exposes_management_views_and_apk_generation():
@@ -206,6 +240,8 @@ def test_dashboard_exposes_management_views_and_apk_generation():
     assert "Générer l’APK" in response.text
     assert "/api/v1/apk/build" in response.text
     assert "/dashboard/logs" in response.text
+    assert 'aria-current="page">Vue d’ensemble' in response.text
+    assert "/assets/dashboard.css" in response.text
 
 
 def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
@@ -232,6 +268,7 @@ def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
     assert "Logs complets" in page.text
     assert "Traitements récents" in page.text
     assert "Fichier reçu par le serveur" in page.text
+    assert 'aria-current="page">Traitements' in page.text
     assert logs.status_code == 200
     assert logs.json()["logs"] == complete_logs
     assert logs.json()["summary"] == main.TASK_FAILURE_SUMMARY

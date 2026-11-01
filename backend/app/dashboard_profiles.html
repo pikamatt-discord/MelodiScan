@@ -3,55 +3,73 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101116">
   <title>Profils · MelodiScan</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
   <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui, sans-serif;
-      background: #0d0e15;
-      color: #f8f9fa;
-    }
-    body { max-width: 760px; margin: 0 auto; padding: 32px 18px; }
-    a { color: #b69cff; }
-    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    main { max-width: 1240px; margin: 0 auto; padding: 0 24px 40px; }
+    .profiles-content { max-width: 760px; }
+    .profiles-description { margin: -5px 0 20px; color: var(--text-muted); font-size: 14px; line-height: 1.65; }
     .profile {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
       align-items: end;
       margin-top: 16px;
-      padding: 20px;
-      border: 1px solid #2a2f3a;
-      border-radius: 16px;
-      background: #161a20;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: linear-gradient(145deg, rgba(28,29,39,.96), rgba(23,24,32,.96));
+      box-shadow: 0 10px 28px rgba(0,0,0,.1);
+      animation: rise-in .4s both;
     }
-    label { display: grid; gap: 8px; color: #94a3b8; font-size: 14px; }
-    input, button {
-      box-sizing: border-box;
+    .profile label { display: grid; gap: 8px; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+    .profile input {
       min-height: 44px;
       padding: 10px 12px;
-      border: 1px solid #353b48;
+      border: 1px solid var(--border);
       border-radius: 10px;
-      background: #202630;
-      color: #f8f9fa;
-      font: inherit;
+      background: rgba(255,255,255,.035);
+      color: var(--text);
+      outline: none;
     }
-    button { cursor: pointer; border: 0; background: #7654d8; font-weight: 700; }
-    #status { min-height: 24px; color: #74e6d1; }
-    @media (max-width: 520px) {
+    .profile input:focus { border-color: rgba(167,139,250,.7); }
+    .profile button {
+      min-height: 44px;
+      padding: 0 18px;
+      border: 1px solid rgba(195,176,255,.3);
+      border-radius: 9px;
+      background: rgba(139,112,223,.2);
+      color: #d6c6ff;
+      cursor: pointer;
+      font-weight: 700;
+      transition: background .18s ease, transform .18s ease;
+    }
+    .profile button:hover { background: rgba(139,112,223,.32); transform: translateY(-1px); }
+    #status { min-height: 24px; color: var(--secondary); font-size: 13px; }
+    @media (max-width: 620px) {
+      main { padding: 0 12px 28px; }
       .profile { grid-template-columns: 1fr; }
-      button { width: 100%; }
+      .profile button { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Profils</h1>
-    <a href="/dashboard">Retour au dashboard</a>
-  </header>
-  <p>Les trois profils servent à classer les partitions sur les appareils partagés.</p>
-  <p id="status" role="status" aria-live="polite"></p>
-  <div id="profiles"></div>
+  <main>
+    <!-- DASHBOARD_NAV -->
+    <div class="page-heading">
+      <div>
+        <div class="eyebrow">PERSONNALISATION</div>
+        <h1>Profils</h1>
+        <p>Organisez les partitions sur vos appareils partagés.</p>
+      </div>
+    </div>
+    <section class="profiles-content" aria-label="Gestion des profils">
+      <p class="profiles-description">Les trois profils permettent de classer les partitions numérisées. Modifiez leurs noms pour retrouver facilement chaque bibliothèque.</p>
+      <p id="status" role="status" aria-live="polite"></p>
+      <div id="profiles"></div>
+    </section>
+  </main>
   <script>
     const status = document.getElementById('status');
     const profiles = document.getElementById('profiles');

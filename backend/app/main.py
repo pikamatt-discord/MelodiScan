@@ -3,14 +3,18 @@ import json
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
 import logging
+import secrets
 import shutil
 import statistics
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, AsyncGenerator
+from urllib.parse import parse_qs, urlencode
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from pydantic import BaseModel, Field
@@ -37,6 +41,13 @@ AUDIVERIS_EXECUTABLE = os.getenv("AUDIVERIS_EXECUTABLE", "audiveris")
 API_KEY = os.getenv("API_KEY", "")
 DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+DASHBOARD_SESSION_SECRET = (
+    os.getenv("DASHBOARD_SESSION_SECRET", "")
+    or API_KEY
+    or secrets.token_urlsafe(32)
+)
+DASHBOARD_SESSION_COOKIE = "melodiscan_dashboard_session"
+DASHBOARD_SESSION_MAX_AGE = 8 * 60 * 60
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 20 * 1024 * 1024))
 TASK_TIMEOUT_SECONDS = int(os.getenv("TASK_TIMEOUT_SECONDS", 600))
 APK_BUILDER_URL = os.getenv("APK_BUILDER_URL", "http://melodiscan-apk-builder:8090")
@@ -71,21 +82,25 @@ async def authenticate_request(request: Request, call_next):
         provided_key = request.headers.get("X-API-Key", "")
         if API_KEY and not hmac.compare_digest(provided_key, API_KEY) and not _has_dashboard_credentials(
             request.headers.get("Authorization", "")
-        ):
+        ) and not _has_dashboard_session(request):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "A valid API key is required."},
                 headers={"WWW-Authenticate": "ApiKey"},
             )
 
-    if (path == "/" or path.startswith("/dashboard")) and DASHBOARD_USERNAME and not _has_dashboard_credentials(
-        request.headers.get("Authorization", "")
+    is_login_route = path in {"/login", "/auth/login", "/logout", "/assets/dashboard.css"}
+    if (
+        not is_login_route
+        and (path == "/" or path.startswith("/dashboard"))
+        and DASHBOARD_USERNAME
+        and not _has_dashboard_credentials(request.headers.get("Authorization", ""))
+        and not _has_dashboard_session(request)
     ):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Dashboard credentials are required."},
-            headers={"WWW-Authenticate": 'Basic realm="MelodiScan Dashboard"'},
-        )
+        target = request.url.path
+        if request.url.query:
+            target += f"?{request.url.query}"
+        return RedirectResponse(f"/login?{urlencode({'next': target})}", status_code=303)
 
     return await call_next(request)
 
@@ -104,6 +119,201 @@ def _has_dashboard_credentials(authorization: str) -> bool:
         and hmac.compare_digest(username, DASHBOARD_USERNAME)
         and hmac.compare_digest(password, DASHBOARD_PASSWORD)
     )
+
+
+def _dashboard_session_signature(expires_at: str) -> str:
+    key = hashlib.sha256(DASHBOARD_SESSION_SECRET.encode()).digest()
+    return hmac.new(key, expires_at.encode(), hashlib.sha256).hexdigest()
+
+
+def _has_dashboard_session(request: Request) -> bool:
+    if not DASHBOARD_USERNAME:
+        return False
+    try:
+        expires_at, signature = request.cookies.get(DASHBOARD_SESSION_COOKIE, "").split(".", 1)
+        expiry = int(expires_at)
+    except (ValueError, TypeError):
+        return False
+    now = int(time.time())
+    return (
+        now < expiry <= now + DASHBOARD_SESSION_MAX_AGE
+        and hmac.compare_digest(signature, _dashboard_session_signature(expires_at))
+    )
+
+
+def _safe_dashboard_redirect(value: str) -> str:
+    if value.startswith("/") and not value.startswith("//") and "\\" not in value and not any(
+        ord(character) < 32 for character in value
+    ):
+        return value
+    return "/dashboard"
+
+
+def dashboard_navigation(active_page: str) -> str:
+    links = (
+        ("overview", "/dashboard", "Vue d’ensemble"),
+        ("logs", "/dashboard/logs", "Traitements"),
+        ("profiles", "/dashboard/profiles", "Profils"),
+    )
+    navigation_items = []
+    for key, href, label in links:
+        current = ' aria-current="page"' if active_page == key else ""
+        navigation_items.append(f'<a href="{href}"{current}>{label}</a>')
+    navigation = "".join(navigation_items)
+    logout = (
+        '<form action="/logout" method="post"><button class="nav-logout" type="submit">Déconnexion</button></form>'
+        if DASHBOARD_USERNAME else ""
+    )
+    return f"""
+    <nav class="topbar" aria-label="Navigation principale">
+        <a class="brand" href="/dashboard" aria-label="MelodiScan, accueil">
+            <span class="brand-mark" aria-hidden="true">♫</span>
+            <span>Melodi<span>Scan</span><small>ESPACE D’ADMINISTRATION</small></span>
+        </a>
+        <div class="nav-links">{navigation}</div>
+        <div class="nav-account"><span class="account-indicator"></span><span>Serveur privé</span>{logout}</div>
+    </nav>
+    """
+
+
+LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101116">
+    <title>Connexion · MelodiScan</title>
+    <link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body class="login-page">
+    <main class="login-layout">
+        <section class="login-story" aria-label="MelodiScan">
+            <a class="brand login-brand" href="/login">
+                <span class="brand-mark" aria-hidden="true">♫</span>
+                <span>Melodi<span>Scan</span><small>ESPACE D’ADMINISTRATION</small></span>
+            </a>
+            <div class="login-message">
+                <span class="eyebrow"><span class="pulse-dot"></span> STUDIO DE NUMÉRISATION MUSICALE</span>
+                <h1>Vos partitions,<br><em>à portée de main.</em></h1>
+                <p>Retrouvez vos traitements, suivez vos services et gérez votre espace MelodiScan.</p>
+            </div>
+            <div class="music-art" aria-hidden="true">
+                <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="login-footnote">Une expérience musicale, pensée dans les moindres détails.</div>
+        </section>
+        <section class="login-panel">
+            <div class="login-card">
+                <div class="login-icon" aria-hidden="true">↗</div>
+                <div class="eyebrow">BON RETOUR</div>
+                <h2>Connexion</h2>
+                <p class="login-intro">Connectez-vous pour accéder à votre tableau de bord.</p>
+                <form id="login-form">
+                    <input type="hidden" name="next">
+                    <label for="username">Identifiant</label>
+                    <input id="username" name="username" autocomplete="username" required autofocus>
+                    <label for="password">Mot de passe</label>
+                    <div class="password-field">
+                        <input id="password" name="password" type="password" autocomplete="current-password" required>
+                        <button id="toggle-password" class="password-toggle" type="button" aria-label="Afficher le mot de passe" aria-pressed="false">Afficher</button>
+                    </div>
+                    <div id="login-error" class="login-error" role="alert" aria-live="polite"></div>
+                    <button class="login-submit" type="submit"><span>Accéder au dashboard</span><span aria-hidden="true">→</span></button>
+                </form>
+                <div class="login-security"><span aria-hidden="true">⌑</span> Connexion sécurisée · Session privée</div>
+            </div>
+            <div class="login-copyright">MELODISCAN <span>·</span> VOTRE ATELIER MUSICAL</div>
+        </section>
+    </main>
+    <script>
+        const form = document.getElementById('login-form');
+        const errorBox = document.getElementById('login-error');
+        form.elements.next.value = new URLSearchParams(location.search).get('next') || '/dashboard';
+        form.addEventListener('submit', async event => {
+            event.preventDefault();
+            const button = form.querySelector('.login-submit');
+            button.disabled = true;
+            errorBox.textContent = '';
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams(new FormData(form))
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.detail || 'Connexion impossible.');
+                location.assign(result.redirect_url);
+            } catch (error) {
+                errorBox.textContent = error.message;
+                button.disabled = false;
+            }
+        });
+        document.getElementById('toggle-password').addEventListener('click', event => {
+            const password = document.getElementById('password');
+            const visible = password.type === 'password';
+            password.type = visible ? 'text' : 'password';
+            event.currentTarget.textContent = visible ? 'Masquer' : 'Afficher';
+            event.currentTarget.setAttribute('aria-pressed', String(visible));
+            event.currentTarget.setAttribute('aria-label', visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe');
+        });
+    </script>
+</body>
+</html>"""
+
+
+@app.get("/assets/dashboard.css")
+async def dashboard_stylesheet():
+    stylesheet = os.path.join(os.path.dirname(__file__), "dashboard.css")
+    return FileResponse(stylesheet, media_type="text/css")
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    if not DASHBOARD_USERNAME:
+        return RedirectResponse("/dashboard", status_code=303)
+    return HTMLResponse(content=LOGIN_PAGE)
+
+
+@app.post("/auth/login")
+async def login(request: Request):
+    if not DASHBOARD_USERNAME:
+        raise HTTPException(status_code=404, detail="Dashboard authentication is not configured.")
+    try:
+        values = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid login form.") from exc
+    username = values.get("username", [""])[0]
+    password = values.get("password", [""])[0]
+    if not (
+        hmac.compare_digest(username, DASHBOARD_USERNAME)
+        and hmac.compare_digest(password, DASHBOARD_PASSWORD)
+    ):
+        return JSONResponse(status_code=401, content={"detail": "Identifiant ou mot de passe incorrect."})
+    expires_at = str(int(time.time()) + DASHBOARD_SESSION_MAX_AGE)
+    response = JSONResponse(
+        content={"redirect_url": _safe_dashboard_redirect(values.get("next", ["/dashboard"])[0])}
+    )
+    response.set_cookie(
+        DASHBOARD_SESSION_COOKIE,
+        f"{expires_at}.{_dashboard_session_signature(expires_at)}",
+        max_age=DASHBOARD_SESSION_MAX_AGE,
+        httponly=True,
+        secure=(
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() == "https"
+        ),
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.post("/logout")
+async def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(DASHBOARD_SESSION_COOKIE, path="/")
+    return response
 
 
 def get_redis_client():
@@ -402,105 +612,88 @@ async def dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MelodiScan Enterprise Dashboard</title>
+    <meta name="theme-color" content="#101116">
+    <title>Tableau de bord · MelodiScan</title>
+    <link rel="stylesheet" href="/assets/dashboard.css">
     <style>
-        :root {
-            --bg: #0D0E15;
-            --surface: #161A20;
-            --surface-elevated: #202630;
-            --primary: #9D4EDD;
-            --secondary: #06D6A0;
-            --accent-cyan: #00F2FE;
-            --text: #F8F9FA;
-            --text-muted: #94A3B8;
-            --border: #2A2F3A;
-        }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            margin: 0;
-            padding: 32px 16px;
+            padding: 0 24px 42px;
         }
         .container {
-            max-width: 1100px;
+            max-width: 1240px;
             margin: 0 auto;
-        }
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 32px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid var(--border);
-        }
-        .logo-title {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        h1 {
-            font-size: 26px;
-            margin: 0;
-            background: linear-gradient(135deg, var(--primary), var(--accent-cyan));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
         }
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
-            margin-bottom: 32px;
+            gap: 15px;
+            margin-bottom: 20px;
         }
         .card {
-            background: var(--surface);
+            background: linear-gradient(145deg, rgba(28, 29, 39, .96), rgba(23, 24, 32, .96));
             border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 22px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-            transition: transform 0.2s;
+            border-radius: 15px;
+            padding: 21px;
+            box-shadow: 0 10px 28px rgba(0,0,0,.12);
+            animation: rise-in .45s both;
+            transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
         }
         .card:hover {
+            border-color: rgba(167,139,250,.25);
+            box-shadow: 0 14px 32px rgba(0,0,0,.2);
             transform: translateY(-2px);
         }
+        .grid .card:nth-child(2) { animation-delay: .04s; }
+        .grid .card:nth-child(3) { animation-delay: .08s; }
+        .grid .card:nth-child(4) { animation-delay: .12s; }
+        .grid .card:nth-child(5) { animation-delay: .16s; }
+        .grid .card:nth-child(6) { animation-delay: .2s; }
+        .grid .card:nth-child(7) { animation-delay: .24s; }
+        .grid .card:nth-child(8) { animation-delay: .28s; }
         .metric-title {
             color: var(--text-muted);
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: .09em;
         }
         .metric-value {
-            font-size: 32px;
-            font-weight: 800;
+            font-size: 34px;
+            font-weight: 720;
+            letter-spacing: -.04em;
             color: var(--secondary);
-            margin-top: 10px;
+            margin-top: 12px;
         }
         .btn {
             display: inline-flex;
             align-items: center;
+            justify-content: center;
             gap: 10px;
-            background: linear-gradient(135deg, var(--accent-cyan), #4FACFE);
-            color: #000;
-            font-weight: bold;
-            padding: 14px 28px;
-            border-radius: 12px;
+            border: 1px solid rgba(195, 176, 255, .38);
+            background: linear-gradient(120deg, #9276e6, #7562c4);
+            color: #fff;
+            font-weight: 700;
+            padding: 12px 19px;
+            border-radius: 10px;
             text-decoration: none;
-            transition: opacity 0.2s, transform 0.2s;
+            transition: filter .2s, transform .2s, box-shadow .2s;
         }
         .btn:hover {
-            opacity: 0.9;
-            transform: translateY(-2px);
+            filter: brightness(1.08);
+            box-shadow: 0 8px 20px rgba(117,98,196,.2);
+            transform: translateY(-1px);
         }
         .badge {
-            display: inline-block;
-            padding: 6px 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border: 1px solid rgba(103,232,194,.18);
             border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-            background: rgba(6, 214, 160, 0.15);
+            background: rgba(103, 232, 194, 0.08);
             color: var(--secondary);
-            border: 1px solid rgba(6, 214, 160, 0.3);
+            font-size: 11px;
+            font-weight: 650;
         }
         table {
             width: 100%;
@@ -514,13 +707,14 @@ async def dashboard():
         }
         th {
             color: var(--text-muted);
-            font-size: 12px;
+            font-size: 10px;
             text-transform: uppercase;
+            letter-spacing: .08em;
         }
         code {
-            background: var(--surface-elevated);
+            background: rgba(255,255,255,.055);
             padding: 4px 8px;
-            border-radius: 6px;
+            border-radius: 5px;
             color: var(--accent-cyan);
             font-family: monospace;
         }
@@ -531,41 +725,47 @@ async def dashboard():
             gap: 12px;
         }
         .section-heading { margin-bottom: 18px; }
-        .section-heading h2, .card h2 { margin: 0; font-size: 19px; }
+        .section-heading h2, .card h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
         .section-tools select, .section-tools input, .btn-secondary {
             color: var(--text);
-            background: var(--surface-elevated);
+            background: rgba(255,255,255,.035);
             border: 1px solid var(--border);
             border-radius: 9px;
             padding: 10px 12px;
         }
+        .section-tools select, .section-tools input { min-height: 40px; }
         .section-tools input { min-width: 180px; }
+        .btn-secondary { text-decoration: none; }
         .btn-secondary {
             cursor: pointer;
             font-weight: 700;
+            font-size: 12px;
+            transition: border-color .2s, background .2s;
         }
+        .btn-secondary:hover { border-color: rgba(167,139,250,.45); background: rgba(167,139,250,.08); }
         .btn:disabled, .btn-secondary:disabled { opacity: .55; cursor: wait; transform: none; }
         .service-grid { justify-content: flex-start; flex-wrap: wrap; margin-top: 16px; }
         .service { display: flex; align-items: center; gap: 8px; padding: 10px 13px;
-            border: 1px solid var(--border); background: var(--surface-elevated); border-radius: 10px; }
+            border: 1px solid var(--border); background: rgba(255,255,255,.025); border-radius: 10px;
+            color: #d3d2dc; font-size: 12px; }
         .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
-        .dot.online { background: var(--secondary); box-shadow: 0 0 12px rgba(6,214,160,.45); }
+        .dot.online { background: var(--secondary); box-shadow: 0 0 12px rgba(103,232,194,.45); }
         .dot.offline { background: #ff6577; }
         .apk-layout { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
         .apk-meta, .muted, .error-text { color: var(--text-muted); font-size: 13px; }
         .apk-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 16px; }
-        .error-text { color: #ff8795; white-space: pre-wrap; }
+        .error-text { color: var(--error); white-space: pre-wrap; }
         .status-pill { display: inline-flex; padding: 5px 9px; border-radius: 99px;
             background: rgba(148,163,184,.12); color: var(--text-muted); font-size: 12px; }
         .status-pill.success { color: var(--secondary); background: rgba(6,214,160,.12); }
-        .status-pill.failed { color: #ff8795; background: rgba(255,101,119,.12); }
-        .status-pill.running { color: var(--accent-cyan); background: rgba(0,242,254,.1); }
-        .task-error { color: #ff8795; margin-top: 5px; max-width: 420px; white-space: normal; }
-        .task-error:hover { color: #ffb6c0; }
+        .status-pill.failed { color: var(--error); background: rgba(251,135,149,.1); }
+        .status-pill.running { color: var(--accent-cyan); background: rgba(125,211,252,.1); }
+        .task-error { color: var(--error); margin-top: 5px; max-width: 420px; white-space: normal; }
+        .task-error:hover { color: #ffc0c8; }
         .last-updated { color: var(--text-muted); font-size: 12px; }
         @media (max-width: 650px) {
-            body { padding: 18px 12px; }
-            .header, .section-heading, .apk-layout { align-items: flex-start; flex-direction: column; }
+            body { padding: 0 12px 28px; }
+            .section-heading, .apk-layout { align-items: flex-start; flex-direction: column; }
             .section-tools { width: 100%; }
             .section-tools input { min-width: 0; width: 100%; }
             th, td { padding: 10px 7px; }
@@ -575,33 +775,14 @@ async def dashboard():
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <div class="logo-title">
-                <svg width="48" height="48" viewBox="0 0 512 512">
-                    <rect width="512" height="512" rx="115" fill="#0D0E15"/>
-                    <g stroke="#00F2FE" stroke-width="20" fill="none">
-                        <path d="M 116 176 L 116 136 Q 116 116 136 116 L 176 116"/>
-                        <path d="M 336 116 L 376 116 Q 396 116 396 136 L 396 176"/>
-                        <path d="M 116 336 L 116 376 Q 116 396 136 396 L 176 396"/>
-                        <path d="M 336 396 L 376 396 Q 396 396 396 376 L 396 336"/>
-                    </g>
-                    <g fill="#9D4EDD">
-                        <rect x="160" y="226" width="18" height="60" rx="9"/>
-                        <rect x="196" y="186" width="18" height="140" rx="9"/>
-                        <rect x="232" y="156" width="18" height="200" rx="9"/>
-                        <rect x="268" y="136" width="18" height="240" rx="9" fill="#00F2FE"/>
-                        <rect x="304" y="176" width="18" height="160" rx="9"/>
-                        <rect x="340" y="206" width="18" height="100" rx="9"/>
-                    </g>
-                </svg>
-                <div>
-                    <h1>MelodiScan Enterprise</h1>
-                    <div style="color: var(--text-muted); font-size: 14px;">Tableau de Bord & Statistiques OMR Temps Réel</div>
-                </div>
+        <!-- DASHBOARD_NAV -->
+        <div class="page-heading">
+            <div>
+                <div class="eyebrow">VOTRE ATELIER MUSICAL</div>
+                <h1>Vue d’ensemble</h1>
+                <p>Suivez vos numérisations et l’activité de vos services en un coup d’œil.</p>
             </div>
-            <a class="btn-secondary" href="/dashboard/logs">Logs complets</a>
-            <a class="btn-secondary" href="/dashboard/profiles">Profils</a>
-            <span class="badge" id="server-badge">Vérification des services…</span>
+            <span class="badge" id="server-badge"><span class="pulse-dot"></span> Vérification des services…</span>
         </div>
 
         <div class="grid">
@@ -876,21 +1057,21 @@ async def dashboard():
     </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(content=html_content.replace("<!-- DASHBOARD_NAV -->", dashboard_navigation("overview")))
 
 
 @app.get("/dashboard/logs", response_class=HTMLResponse)
 async def dashboard_logs():
     logs_page = os.path.join(os.path.dirname(__file__), "dashboard_logs.html")
     with open(logs_page, encoding="utf-8") as page:
-        return HTMLResponse(content=page.read())
+        return HTMLResponse(content=page.read().replace("<!-- DASHBOARD_NAV -->", dashboard_navigation("logs")))
 
 
 @app.get("/dashboard/profiles", response_class=HTMLResponse)
 async def dashboard_profiles():
     page_path = os.path.join(os.path.dirname(__file__), "dashboard_profiles.html")
     with open(page_path, encoding="utf-8") as page:
-        return HTMLResponse(content=page.read())
+        return HTMLResponse(content=page.read().replace("<!-- DASHBOARD_NAV -->", dashboard_navigation("profiles")))
 
 
 @app.get("/download/app-release.apk")

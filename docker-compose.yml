@@ -18,6 +18,7 @@ services:
       - API_KEY=${API_KEY:-}
       - DASHBOARD_USERNAME=${DASHBOARD_USERNAME:-}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET:-}
     volumes:
       - ./data/temp:/app/data/temp
       - ./data/library:/app/data/library
