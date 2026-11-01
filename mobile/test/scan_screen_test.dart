@@ -13,7 +13,7 @@ void main() {
       ),
     );
 
-    expect(find.text('MelodiScan Scanner'), findsOneWidget);
+    expect(find.text('MelodiScan'), findsOneWidget);
     expect(find.text('Prendre en photo'), findsOneWidget);
     expect(find.text('Choisir une image'), findsOneWidget);
     expect(find.text('Importer un PDF'), findsOneWidget);
@@ -21,13 +21,18 @@ void main() {
     expect(find.text('Binarisation Sauvola'), findsNothing);
     expect(find.text('Galerie (Multi)'), findsNothing);
 
-    expect(find.text('Aucun fichier sélectionné'), findsOneWidget);
-    expect(find.text('Lancer la reconnaissance OMR'), findsOneWidget);
+    expect(find.text('Aucun fichier sélectionné'), findsNothing);
+    expect(find.text('Analyser la partition'), findsOneWidget);
     expect(find.text('Réglages avancés'), findsOneWidget);
-    final buttons = tester.widgetList<ElevatedButton>(
-      find.byWidgetPredicate((widget) => widget is ElevatedButton),
+    final analyzeButton = tester.widget<ButtonStyleButton>(
+      find.ancestor(
+        of: find.text('Analyser la partition'),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is ButtonStyleButton,
+        ),
+      ),
     );
-    expect(buttons.any((button) => button.onPressed == null), isTrue);
+    expect(analyzeButton.onPressed, isNull);
 
     await tester.ensureVisible(find.text('Réglages avancés'));
     await tester.tap(find.text('Réglages avancés'));

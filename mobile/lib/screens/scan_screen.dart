@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
 import '../network/api_client.dart';
-import '../widgets/melodiscan_logo.dart';
 import '../widgets/melodiscan_background.dart';
+import '../widgets/melodiscan_logo.dart';
 import 'status_screen.dart';
 
 class ScanScreen extends StatefulWidget {
@@ -201,7 +201,7 @@ class _ScanScreenState extends State<ScanScreen> {
           children: [
             MelodiScanLogo(size: 28),
             SizedBox(width: 10),
-            Text('MelodiScan Scanner'),
+            Text('MelodiScan'),
           ],
         ),
       ),
@@ -226,29 +226,21 @@ class _ScanScreenState extends State<ScanScreen> {
                   border: Border.all(
                       color: theme.colorScheme.primary.withValues(alpha: 0.2)),
                 ),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const MelodiScanLogo(size: 54),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Donnez vie à vos partitions',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            'Importez un document et transformez-le en musique.',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: Colors.white70,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
+                    Text(
+                      'Votre partition, prête à écouter.',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Photographiez-la ou importez un PDF ou une image pour démarrer.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                        height: 1.4,
                       ),
                     ),
                   ],
@@ -349,123 +341,20 @@ class _ScanScreenState extends State<ScanScreen> {
                   ),
                 ),
               ],
-              const SizedBox(height: 16),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 240),
-                height: hasFile ? 200 : 218,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: hasFile
-                        ? theme.colorScheme.secondary.withValues(alpha: 0.4)
-                        : Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 24, vertical: 32),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: List.generate(
-                            5,
-                            (_) => Container(
-                              height: 1.5,
-                              color: Colors.white.withValues(alpha: 0.11),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Center(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        child: Column(
-                          key: ValueKey(hasFile),
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              width: 58,
-                              height: 58,
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primary
-                                    .withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: Icon(
-                                hasFile
-                                    ? _selectedFileIsPdf
-                                        ? Icons.picture_as_pdf_rounded
-                                        : Icons.document_scanner_rounded
-                                    : Icons.photo_size_select_actual_rounded,
-                                size: 30,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text(
-                              hasFile
-                                  ? _selectedFileIsPdf
-                                      ? 'PDF prêt à être envoyé'
-                                      : 'Image prête à être envoyée'
-                                  : 'Aucun fichier sélectionné',
-                              style: theme.textTheme.titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 6),
-                            const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 20),
-                              child: Text(
-                                'La reconnaissance et la conversion sont effectuées par le serveur.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: Colors.white70, fontSize: 12),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (_isUploading)
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.78),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CircularProgressIndicator(),
-                              SizedBox(height: 16),
-                              Text('Envoi du document au serveur...',
-                                  style: TextStyle(color: Colors.white)),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _isUploading || !hasFile ? null : _uploadAndProcess,
-                icon: const Icon(Icons.rocket_launch_rounded),
-                label: Text(_isUploading
-                    ? 'Transfert en cours...'
-                    : 'Lancer la reconnaissance OMR'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
-                ),
-              ),
               const SizedBox(height: 18),
+              FilledButton.icon(
+                onPressed: _isUploading || !hasFile ? null : _uploadAndProcess,
+                icon: _isUploading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.auto_awesome_rounded),
+                label: Text(
+                    _isUploading ? 'Envoi en cours…' : 'Analyser la partition'),
+              ),
+              const SizedBox(height: 20),
               Card(
                 margin: EdgeInsets.zero,
                 clipBehavior: Clip.antiAlias,

@@ -12,6 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_riverpod: ^2.4.9
+  flutter_svg: ^2.2.3
   http: ^1.1.2
   crypto: ^3.0.8
   path_provider: ^2.1.2
@@ -27,9 +28,19 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.4
   flutter_lints: ^3.0.0
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/images/melodiscan_icon.png
+  adaptive_icon_background: "#0D0E15"
+  adaptive_icon_foreground: assets/images/melodiscan_icon_foreground.png
+  adaptive_icon_foreground_inset: 0
 
 flutter:
   uses-material-design: true
   assets:
+    - assets/images/melodiscan_logo.svg
     - assets/soundfonts/COPYRIGHT.txt

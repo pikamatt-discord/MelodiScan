@@ -5,6 +5,6 @@ import 'package:melodiscan_mobile/main.dart';
 void main() {
   testWidgets('App starts with dark theme', (WidgetTester tester) async {
     await tester.pumpWidget(const ProviderScope(child: MelodiScanApp()));
-    expect(find.text('MelodiScan Scanner'), findsOneWidget);
+    expect(find.text('MelodiScan'), findsOneWidget);
   });
 }
