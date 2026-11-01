@@ -17,6 +17,8 @@ mobile/.dart_tool/
 mobile/.pub-cache/
 mobile/.pub/
 mobile/.idea/
+backend/dashboard/node_modules/
+backend/dashboard/dist/
 
 # IDEs & System files
 .DS_Store

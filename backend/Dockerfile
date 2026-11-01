@@ -1,3 +1,11 @@
+FROM node:22-alpine AS dashboard-builder
+
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+COPY dashboard/ ./
+RUN npm run build
+
 FROM python:3.11-slim-bookworm
 
 ARG AUDIVERIS_VERSION=5.10.0
@@ -48,6 +56,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app /app/app
+COPY --from=dashboard-builder /dashboard/dist /app/dashboard/dist
 
 EXPOSE 8080
 

@@ -41,14 +41,28 @@ def read_environment() -> dict[str, str]:
     return values
 
 
-def request(url: str, *, headers=None, auth=None, data=None, context=None, timeout=15):
+def request(url: str, *, headers=None, auth=None, data=None, context=None, timeout=15,
+            follow_redirects=True):
     request_headers = dict(headers or {})
     if auth is not None:
         token = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
         request_headers["Authorization"] = f"Basic {token}"
     req = urllib.request.Request(url, data=data, headers=request_headers)
+    if follow_redirects and context:
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
+    elif not follow_redirects:
+        class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, response, code, message, headers, new_url):
+                return None
+
+        handlers = [NoRedirectHandler()]
+        if context:
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        opener = urllib.request.build_opener(*handlers)
+    else:
+        opener = urllib.request.build_opener()
     try:
-        with urllib.request.urlopen(req, context=context, timeout=timeout) as response:
+        with opener.open(req, timeout=timeout) as response:
             return response.status, response.read(), dict(response.headers)
     except urllib.error.HTTPError as error:
         return error.code, error.read(), dict(error.headers)
@@ -245,23 +259,39 @@ def main() -> int:
             f"HTTP {fingerprint_status}",
         ))
 
-        status, _, _ = request(f"{API_URL}/dashboard")
-        checks.append(report("dashboard rejects missing credentials", status == 401, f"HTTP {status}"))
+        status, _, headers = request(f"{API_URL}/dashboard", follow_redirects=False)
+        checks.append(report(
+            "dashboard sends unauthenticated visitors to sign-in",
+            status == 303 and headers.get("Location", "").startswith("/login"),
+            f"HTTP {status}",
+        ))
 
-        status, _, _ = request(
+        status, _, headers = request(
             f"{API_URL}/dashboard",
             auth=(username, "invalid-e2e-password"),
+            follow_redirects=False,
         )
-        checks.append(report("dashboard rejects invalid credentials",
-                             status == 401, f"HTTP {status}"))
+        checks.append(report(
+            "dashboard sends invalid credentials back to sign-in",
+            status == 303 and headers.get("Location", "").startswith("/login"),
+            f"HTTP {status}",
+        ))
 
-        status, body, _ = request(
+        status, body, headers = request(
             f"{https_url}/dashboard",
             auth=(username, password),
             context=ssl.create_default_context(cafile=str(CERT_FILE)),
         )
         checks.append(report("dashboard accepts configured credentials",
-                             status == 200 and b"MelodiScan" in body, f"HTTP {status}"))
+                             status == 200 and b"MelodiScan" in body
+                             and b"/dashboard-assets/" in body, f"HTTP {status}"))
+
+        status, body, _ = request(
+            f"{https_url}/login",
+            context=ssl.create_default_context(cafile=str(CERT_FILE)),
+        )
+        checks.append(report("dashboard login page loads the React interface",
+                             status == 200 and b"/dashboard-assets/" in body, f"HTTP {status}"))
 
         status, _, _ = request(f"{API_URL}/download/app-release.apk")
         checks.append(report("APK download rejects missing key", status == 401, f"HTTP {status}"))

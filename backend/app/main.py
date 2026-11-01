@@ -10,12 +10,13 @@ import secrets
 import shutil
 import statistics
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, AsyncGenerator
 from urllib.parse import parse_qs, urlencode
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import httpx
 from pydantic import BaseModel, Field
 import redis
@@ -89,10 +90,10 @@ async def authenticate_request(request: Request, call_next):
                 headers={"WWW-Authenticate": "ApiKey"},
             )
 
-    is_login_route = path in {"/login", "/auth/login", "/logout", "/assets/dashboard.css"}
+    is_login_route = path in {"/login", "/auth/login", "/logout"}
     if (
         not is_login_route
-        and (path == "/" or path.startswith("/dashboard"))
+        and (path == "/" or path == "/dashboard" or path.startswith("/dashboard/"))
         and DASHBOARD_USERNAME
         and not _has_dashboard_credentials(request.headers.get("Authorization", ""))
         and not _has_dashboard_session(request)
@@ -149,130 +150,35 @@ def _safe_dashboard_redirect(value: str) -> str:
     return "/dashboard"
 
 
-def dashboard_navigation(active_page: str) -> str:
-    links = (
-        ("overview", "/dashboard", "Vue d’ensemble"),
-        ("logs", "/dashboard/logs", "Traitements"),
-        ("profiles", "/dashboard/profiles", "Profils"),
-    )
-    navigation_items = []
-    for key, href, label in links:
-        current = ' aria-current="page"' if active_page == key else ""
-        navigation_items.append(f'<a href="{href}"{current}>{label}</a>')
-    navigation = "".join(navigation_items)
-    logout = (
-        '<form action="/logout" method="post"><button class="nav-logout" type="submit">Déconnexion</button></form>'
-        if DASHBOARD_USERNAME else ""
-    )
-    return f"""
-    <nav class="topbar" aria-label="Navigation principale">
-        <a class="brand" href="/dashboard" aria-label="MelodiScan, accueil">
-            <span class="brand-mark" aria-hidden="true">♫</span>
-            <span>Melodi<span>Scan</span><small>ESPACE D’ADMINISTRATION</small></span>
-        </a>
-        <div class="nav-links">{navigation}</div>
-        <div class="nav-account"><span class="account-indicator"></span><span>Serveur privé</span>{logout}</div>
-    </nav>
-    """
+DASHBOARD_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard", "dist")
+
+app.mount(
+    "/dashboard-assets",
+    StaticFiles(directory=DASHBOARD_DIST, check_dir=False),
+    name="dashboard-assets",
+)
 
 
-LOGIN_PAGE = """<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#101116">
-    <title>Connexion · MelodiScan</title>
-    <link rel="stylesheet" href="/assets/dashboard.css">
-</head>
-<body class="login-page">
-    <main class="login-layout">
-        <section class="login-story" aria-label="MelodiScan">
-            <a class="brand login-brand" href="/login">
-                <span class="brand-mark" aria-hidden="true">♫</span>
-                <span>Melodi<span>Scan</span><small>ESPACE D’ADMINISTRATION</small></span>
-            </a>
-            <div class="login-message">
-                <span class="eyebrow"><span class="pulse-dot"></span> STUDIO DE NUMÉRISATION MUSICALE</span>
-                <h1>Vos partitions,<br><em>à portée de main.</em></h1>
-                <p>Retrouvez vos traitements, suivez vos services et gérez votre espace MelodiScan.</p>
-            </div>
-            <div class="music-art" aria-hidden="true">
-                <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                <span></span><span></span><span></span><span></span><span></span><span></span>
-            </div>
-            <div class="login-footnote">Une expérience musicale, pensée dans les moindres détails.</div>
-        </section>
-        <section class="login-panel">
-            <div class="login-card">
-                <div class="login-icon" aria-hidden="true">↗</div>
-                <div class="eyebrow">BON RETOUR</div>
-                <h2>Connexion</h2>
-                <p class="login-intro">Connectez-vous pour accéder à votre tableau de bord.</p>
-                <form id="login-form">
-                    <input type="hidden" name="next">
-                    <label for="username">Identifiant</label>
-                    <input id="username" name="username" autocomplete="username" required autofocus>
-                    <label for="password">Mot de passe</label>
-                    <div class="password-field">
-                        <input id="password" name="password" type="password" autocomplete="current-password" required>
-                        <button id="toggle-password" class="password-toggle" type="button" aria-label="Afficher le mot de passe" aria-pressed="false">Afficher</button>
-                    </div>
-                    <div id="login-error" class="login-error" role="alert" aria-live="polite"></div>
-                    <button class="login-submit" type="submit"><span>Accéder au dashboard</span><span aria-hidden="true">→</span></button>
-                </form>
-                <div class="login-security"><span aria-hidden="true">⌑</span> Connexion sécurisée · Session privée</div>
-            </div>
-            <div class="login-copyright">MELODISCAN <span>·</span> VOTRE ATELIER MUSICAL</div>
-        </section>
-    </main>
-    <script>
-        const form = document.getElementById('login-form');
-        const errorBox = document.getElementById('login-error');
-        form.elements.next.value = new URLSearchParams(location.search).get('next') || '/dashboard';
-        form.addEventListener('submit', async event => {
-            event.preventDefault();
-            const button = form.querySelector('.login-submit');
-            button.disabled = true;
-            errorBox.textContent = '';
-            try {
-                const response = await fetch('/auth/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams(new FormData(form))
-                });
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.detail || 'Connexion impossible.');
-                location.assign(result.redirect_url);
-            } catch (error) {
-                errorBox.textContent = error.message;
-                button.disabled = false;
-            }
-        });
-        document.getElementById('toggle-password').addEventListener('click', event => {
-            const password = document.getElementById('password');
-            const visible = password.type === 'password';
-            password.type = visible ? 'text' : 'password';
-            event.currentTarget.textContent = visible ? 'Masquer' : 'Afficher';
-            event.currentTarget.setAttribute('aria-pressed', String(visible));
-            event.currentTarget.setAttribute('aria-label', visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe');
-        });
-    </script>
-</body>
-</html>"""
+def dashboard_index():
+    index_path = os.path.join(DASHBOARD_DIST, "index.html")
+    if not os.path.isfile(index_path):
+        raise HTTPException(status_code=503, detail="Dashboard frontend is not built.")
+    return FileResponse(index_path, media_type="text/html")
 
 
-@app.get("/assets/dashboard.css")
-async def dashboard_stylesheet():
-    stylesheet = os.path.join(os.path.dirname(__file__), "dashboard.css")
-    return FileResponse(stylesheet, media_type="text/css")
+@app.get("/", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/dashboard/logs", response_class=HTMLResponse)
+@app.get("/dashboard/profiles", response_class=HTMLResponse)
+async def dashboard_page():
+    return dashboard_index()
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
     if not DASHBOARD_USERNAME:
         return RedirectResponse("/dashboard", status_code=303)
-    return HTMLResponse(content=LOGIN_PAGE)
+    return dashboard_index()
 
 
 @app.post("/auth/login")
@@ -465,6 +371,14 @@ async def get_system_stats():
         if (created := _parse_timestamp(task.get("created_at"))) is not None
         and created.astimezone(timezone.utc).date() == today
     )
+    activity_dates = [today - timedelta(days=offset) for offset in range(6, -1, -1)]
+    activity_by_day = {day.isoformat(): 0 for day in activity_dates}
+    for task in tasks:
+        created = _parse_timestamp(task.get("created_at"))
+        if created:
+            day = created.astimezone(timezone.utc).date().isoformat()
+            if day in activity_by_day:
+                activity_by_day[day] += 1
     durations = []
     for task in tasks:
         started = _parse_timestamp(task.get("created_at"))
@@ -484,6 +398,10 @@ async def get_system_stats():
         "avg_processing_time_sec": round(statistics.mean(durations), 2) if durations else None,
         "redis_online": redis_online,
         "primary_omr_engine": "Audiveris v5.10.0",
+        "activity_by_day": [
+            {"date": day.isoformat(), "count": activity_by_day[day.isoformat()]}
+            for day in activity_dates
+        ],
         "recent_tasks": [
             {
                 "task_id": task.get("task_id"),
@@ -602,476 +520,6 @@ async def get_apk_build_status(build_id: str):
         raise HTTPException(status_code=400, detail="Invalid APK build ID.") from exc
     status, payload = await request_apk_builder("GET", f"/build/{normalized_build_id}")
     return JSONResponse(status_code=status, content=payload)
-
-
-@app.get("/", response_class=HTMLResponse)
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard():
-    html_content = """<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#101116">
-    <title>Tableau de bord · MelodiScan</title>
-    <link rel="stylesheet" href="/assets/dashboard.css">
-    <style>
-        body {
-            padding: 0 24px 42px;
-        }
-        .container {
-            max-width: 1240px;
-            margin: 0 auto;
-        }
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        .card {
-            background: linear-gradient(145deg, rgba(28, 29, 39, .96), rgba(23, 24, 32, .96));
-            border: 1px solid var(--border);
-            border-radius: 15px;
-            padding: 21px;
-            box-shadow: 0 10px 28px rgba(0,0,0,.12);
-            animation: rise-in .45s both;
-            transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
-        }
-        .card:hover {
-            border-color: rgba(167,139,250,.25);
-            box-shadow: 0 14px 32px rgba(0,0,0,.2);
-            transform: translateY(-2px);
-        }
-        .grid .card:nth-child(2) { animation-delay: .04s; }
-        .grid .card:nth-child(3) { animation-delay: .08s; }
-        .grid .card:nth-child(4) { animation-delay: .12s; }
-        .grid .card:nth-child(5) { animation-delay: .16s; }
-        .grid .card:nth-child(6) { animation-delay: .2s; }
-        .grid .card:nth-child(7) { animation-delay: .24s; }
-        .grid .card:nth-child(8) { animation-delay: .28s; }
-        .metric-title {
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: .09em;
-        }
-        .metric-value {
-            font-size: 34px;
-            font-weight: 720;
-            letter-spacing: -.04em;
-            color: var(--secondary);
-            margin-top: 12px;
-        }
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            border: 1px solid rgba(195, 176, 255, .38);
-            background: linear-gradient(120deg, #9276e6, #7562c4);
-            color: #fff;
-            font-weight: 700;
-            padding: 12px 19px;
-            border-radius: 10px;
-            text-decoration: none;
-            transition: filter .2s, transform .2s, box-shadow .2s;
-        }
-        .btn:hover {
-            filter: brightness(1.08);
-            box-shadow: 0 8px 20px rgba(117,98,196,.2);
-            transform: translateY(-1px);
-        }
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            border: 1px solid rgba(103,232,194,.18);
-            border-radius: 20px;
-            background: rgba(103, 232, 194, 0.08);
-            color: var(--secondary);
-            font-size: 11px;
-            font-weight: 650;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 16px;
-        }
-        th, td {
-            text-align: left;
-            padding: 14px;
-            border-bottom: 1px solid var(--border);
-        }
-        th {
-            color: var(--text-muted);
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: .08em;
-        }
-        code {
-            background: rgba(255,255,255,.055);
-            padding: 4px 8px;
-            border-radius: 5px;
-            color: var(--accent-cyan);
-            font-family: monospace;
-        }
-        .section-heading, .section-tools, .apk-actions, .service-grid {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-        }
-        .section-heading { margin-bottom: 18px; }
-        .section-heading h2, .card h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
-        .section-tools select, .section-tools input, .btn-secondary {
-            color: var(--text);
-            background: rgba(255,255,255,.035);
-            border: 1px solid var(--border);
-            border-radius: 9px;
-            padding: 10px 12px;
-        }
-        .section-tools select, .section-tools input { min-height: 40px; }
-        .section-tools input { min-width: 180px; }
-        .btn-secondary { text-decoration: none; }
-        .btn-secondary {
-            cursor: pointer;
-            font-weight: 700;
-            font-size: 12px;
-            transition: border-color .2s, background .2s;
-        }
-        .btn-secondary:hover { border-color: rgba(167,139,250,.45); background: rgba(167,139,250,.08); }
-        .btn:disabled, .btn-secondary:disabled { opacity: .55; cursor: wait; transform: none; }
-        .service-grid { justify-content: flex-start; flex-wrap: wrap; margin-top: 16px; }
-        .service { display: flex; align-items: center; gap: 8px; padding: 10px 13px;
-            border: 1px solid var(--border); background: rgba(255,255,255,.025); border-radius: 10px;
-            color: #d3d2dc; font-size: 12px; }
-        .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
-        .dot.online { background: var(--secondary); box-shadow: 0 0 12px rgba(103,232,194,.45); }
-        .dot.offline { background: #ff6577; }
-        .apk-layout { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
-        .apk-meta, .muted, .error-text { color: var(--text-muted); font-size: 13px; }
-        .apk-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 16px; }
-        .error-text { color: var(--error); white-space: pre-wrap; }
-        .status-pill { display: inline-flex; padding: 5px 9px; border-radius: 99px;
-            background: rgba(148,163,184,.12); color: var(--text-muted); font-size: 12px; }
-        .status-pill.success { color: var(--secondary); background: rgba(6,214,160,.12); }
-        .status-pill.failed { color: var(--error); background: rgba(251,135,149,.1); }
-        .status-pill.running { color: var(--accent-cyan); background: rgba(125,211,252,.1); }
-        .task-error { color: var(--error); margin-top: 5px; max-width: 420px; white-space: normal; }
-        .task-error:hover { color: #ffc0c8; }
-        .last-updated { color: var(--text-muted); font-size: 12px; }
-        @media (max-width: 650px) {
-            body { padding: 0 12px 28px; }
-            .section-heading, .apk-layout { align-items: flex-start; flex-direction: column; }
-            .section-tools { width: 100%; }
-            .section-tools input { min-width: 0; width: 100%; }
-            th, td { padding: 10px 7px; }
-            table { font-size: 12px; }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <!-- DASHBOARD_NAV -->
-        <div class="page-heading">
-            <div>
-                <div class="eyebrow">VOTRE ATELIER MUSICAL</div>
-                <h1>Vue d’ensemble</h1>
-                <p>Suivez vos numérisations et l’activité de vos services en un coup d’œil.</p>
-            </div>
-            <span class="badge" id="server-badge"><span class="pulse-dot"></span> Vérification des services…</span>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <div class="metric-title">Partitions Numérisées</div>
-                <div class="metric-value" id="stat-total">0</div>
-                <div style="font-size: 12px; margin-top: 6px; color: var(--text-muted);">Total Demandes OMR</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">Réussies</div>
-                <div class="metric-value" id="stat-completed">0</div>
-                <div class="muted">Résultats MIDI disponibles</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">En échec</div>
-                <div class="metric-value" style="color: #ff8795;" id="stat-failed">0</div>
-                <div class="muted">Reconnaissance ou conversion échouée</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">En cours</div>
-                <div class="metric-value" style="color: var(--accent-cyan);" id="stat-running">0</div>
-                <div class="muted">Tâches en attente ou traitement</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">Aujourd’hui</div>
-                <div class="metric-value" style="color: var(--primary);" id="stat-today">0</div>
-                <div class="muted">Demandes reçues depuis minuit UTC</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">Taux de réussite</div>
-                <div class="metric-value" style="color: #00F2FE;" id="stat-rate">—</div>
-                <div class="muted">Calculé sur les tâches terminées</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">Temps moyen</div>
-                <div class="metric-value" style="color: var(--primary);" id="stat-time">—</div>
-                <div class="muted">Durée des traitements réussis</div>
-            </div>
-
-            <div class="card">
-                <div class="metric-title">Redis</div>
-                <div class="metric-value" style="color: #06D6A0;" id="stat-redis">—</div>
-                <div class="muted">File et historique des tâches</div>
-            </div>
-        </div>
-
-        <div class="card" style="margin-bottom: 20px;">
-            <div class="section-heading">
-                <h2>État des services</h2>
-                <span class="last-updated" id="last-updated">Actualisation automatique</span>
-            </div>
-            <div class="service-grid">
-                <div class="service"><span class="dot" id="service-api-dot"></span>API</div>
-                <div class="service"><span class="dot" id="service-redis-dot"></span>Redis</div>
-                <div class="service"><span class="dot" id="service-worker-dot"></span>Worker Celery</div>
-                <div class="service"><span class="dot" id="service-audiveris-dot"></span>Audiveris</div>
-                <div class="service"><span class="dot" id="service-apk_builder-dot"></span>Générateur Android</div>
-            </div>
-        </div>
-
-        <div class="card" style="margin-bottom: 20px;">
-            <div class="apk-layout">
-                <div>
-                    <h2>Application Android</h2>
-                    <div class="apk-meta" id="apk-status" style="margin-top: 8px;">Vérification de l’APK…</div>
-                    <div class="error-text" id="apk-error" role="status" style="margin-top: 8px;"></div>
-                </div>
-                <div class="apk-actions">
-                    <button class="btn" id="build-apk-button" type="button">Générer l’APK</button>
-                    <a class="btn-secondary" id="download-apk-link" href="/download/app-release.apk"
-                       style="display:none; text-decoration:none;">Télécharger l’APK</a>
-                </div>
-            </div>
-            <div class="muted" style="margin-top: 12px;">
-                La compilation utilise l’adresse HTTPS du serveur, la clé API configurée et sa CA Caddy.
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-heading">
-                <h2>Historique des numérisations</h2>
-                <div class="section-tools">
-                    <select id="task-filter" aria-label="Filtrer les tâches">
-                        <option value="all">Tous les statuts</option>
-                        <option value="STATUS_COMPLETED">Réussies</option>
-                        <option value="STATUS_FAILED">En échec</option>
-                        <option value="running">En cours</option>
-                    </select>
-                    <input id="task-search" type="search" placeholder="Rechercher un titre ou ID"
-                           aria-label="Rechercher dans les tâches">
-                </div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Tâche</th>
-                        <th>Partition</th>
-                        <th>État</th>
-                        <th>Créée</th>
-                        <th>Résultat</th>
-                    </tr>
-                </thead>
-                <tbody id="tasks-table-body">
-                    <tr>
-                        <td colspan="5" style="color: var(--text-muted); text-align: center;">Chargement des tâches…</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        const runningStatuses = new Set([
-            'STATUS_QUEUED', 'STATUS_PROCESSING_IMAGE', 'STATUS_RUNNING_OMR',
-            'STATUS_BUILDING_MUSICXML', 'STATUS_EXPORTING_MIDI'
-        ]);
-        let currentTasks = [];
-
-        async function apiRequest(url, options = {}) {
-            const response = await fetch(url, { cache: 'no-store', ...options });
-            let payload = {};
-            try { payload = await response.json(); } catch (_) {}
-            if (!response.ok) {
-                throw new Error(payload.detail || `Erreur HTTP ${response.status}`);
-            }
-            return payload;
-        }
-
-        function escapeHtml(value) {
-            return String(value ?? '').replace(/[&<>"']/g, character => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-            })[character]);
-        }
-
-        function formatDate(value) {
-            if (!value) return '—';
-            const date = new Date(value);
-            return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('fr-FR');
-        }
-
-        function renderTasks() {
-            const tbody = document.getElementById('tasks-table-body');
-            const filter = document.getElementById('task-filter').value;
-            const query = document.getElementById('task-search').value.trim().toLocaleLowerCase();
-            const tasks = currentTasks.filter(task => {
-                const statusMatch = filter === 'all' ||
-                    (filter === 'running' ? runningStatuses.has(task.status) : task.status === filter);
-                const searchMatch = !query ||
-                    `${task.title || ''} ${task.task_id || ''}`.toLocaleLowerCase().includes(query);
-                return statusMatch && searchMatch;
-            });
-            if (!tasks.length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;">Aucune tâche pour ces filtres.</td></tr>';
-                return;
-            }
-            tbody.innerHTML = tasks.map(task => {
-                const failed = task.status === 'STATUS_FAILED';
-                const completed = task.status === 'STATUS_COMPLETED';
-                const running = runningStatuses.has(task.status);
-                const className = failed ? 'failed' : completed ? 'success' : running ? 'running' : '';
-                const statusLabel = failed ? 'Échec' : completed ? 'Terminée' :
-                    running ? 'En cours' : (task.status || 'Inconnue');
-                const result = completed
-                    ? `<a href="/api/v1/result/${encodeURIComponent(task.task_id)}">Télécharger MIDI</a>`
-                    : '—';
-                const logsLink =
-                    `<a class="task-error" href="/dashboard/logs?task_id=${encodeURIComponent(task.task_id)}">Voir les logs</a>`;
-                return `<tr>
-                    <td><code>${escapeHtml((task.task_id || '').slice(0, 12))}</code></td>
-                    <td><strong>${escapeHtml(task.title || 'Partition sans titre')}</strong></td>
-                    <td><span class="status-pill ${className}">${escapeHtml(statusLabel)}</span>
-                        ${logsLink}</td>
-                    <td>${escapeHtml(formatDate(task.created_at))}</td>
-                    <td>${result}</td>
-                </tr>`;
-            }).join('');
-        }
-
-        async function fetchStats() {
-            try {
-                const data = await apiRequest('/api/v1/stats');
-                document.getElementById('stat-total').innerText = data.total_scans;
-                document.getElementById('stat-completed').innerText = data.completed_scans;
-                document.getElementById('stat-failed').innerText = data.failed_scans;
-                document.getElementById('stat-running').innerText = data.running_scans;
-                document.getElementById('stat-today').innerText = data.today_scans;
-                document.getElementById('stat-rate').innerText = data.success_rate + '%';
-                document.getElementById('stat-time').innerText =
-                    data.avg_processing_time_sec == null ? '—' : `${data.avg_processing_time_sec}s`;
-                document.getElementById('stat-redis').innerText = data.redis_online ? 'En ligne' : 'Indisponible';
-                currentTasks = data.recent_tasks || [];
-                renderTasks();
-                document.getElementById('last-updated').innerText =
-                    `Mis à jour à ${new Date().toLocaleTimeString('fr-FR')}`;
-            } catch (e) {
-                document.getElementById('last-updated').innerText = `Statistiques indisponibles : ${e.message}`;
-            }
-        }
-
-        async function fetchHealth() {
-            const badge = document.getElementById('server-badge');
-            try {
-                const response = await fetch('/health', { cache: 'no-store' });
-                const data = await response.json();
-                const dependencies = data.dependencies || {};
-                for (const service of ['redis', 'celery_worker', 'audiveris', 'apk_builder']) {
-                    const indicator = document.getElementById(`service-${service}-dot`);
-                    indicator.className = `dot ${dependencies[service] ? 'online' : 'offline'}`;
-                }
-                document.getElementById('service-api-dot').className =
-                    response.ok ? 'dot online' : 'dot offline';
-                badge.innerText = data.status === 'ok' ? 'Tous les services opérationnels' : 'Service dégradé';
-                badge.style.color = data.status === 'ok' ? 'var(--secondary)' : '#ff8795';
-            } catch (error) {
-                badge.innerText = `API indisponible : ${error.message}`;
-                badge.style.color = '#ff8795';
-            }
-        }
-
-        function renderApk(data) {
-            const apk = data.apk || {};
-            const building = data.status === 'building';
-            const button = document.getElementById('build-apk-button');
-            const download = document.getElementById('download-apk-link');
-            const detail = apk.available
-                ? `APK réel prêt · ${(apk.size_bytes / 1048576).toFixed(1)} Mio · généré le ${formatDate(apk.generated_at)} · SHA-256 ${escapeHtml((apk.sha256 || '').slice(0, 16))}…`
-                : 'Aucun APK généré sur ce serveur.';
-            document.getElementById('apk-status').innerText =
-                building ? `${data.progress || 'Génération en cours…'} · ${detail}` : detail;
-            document.getElementById('apk-error').textContent = data.status === 'failed' ? (data.error || 'Échec de compilation.') : '';
-            button.disabled = building;
-            button.innerText = building ? 'Génération en cours…' : 'Générer l’APK';
-            download.style.display = apk.available ? 'inline-flex' : 'none';
-        }
-
-        async function fetchApkStatus() {
-            try {
-                renderApk(await apiRequest('/api/v1/apk/status'));
-            } catch (error) {
-                document.getElementById('apk-status').innerText = `Générateur indisponible : ${error.message}`;
-                document.getElementById('build-apk-button').disabled = false;
-            }
-        }
-
-        async function startApkBuild() {
-            const button = document.getElementById('build-apk-button');
-            button.disabled = true;
-            document.getElementById('apk-error').textContent = '';
-            try {
-                await apiRequest('/api/v1/apk/build', { method: 'POST' });
-            } catch (error) {
-                document.getElementById('apk-error').textContent = error.message;
-            }
-            await fetchApkStatus();
-        }
-
-        document.getElementById('build-apk-button').addEventListener('click', startApkBuild);
-        document.getElementById('task-filter').addEventListener('change', renderTasks);
-        document.getElementById('task-search').addEventListener('input', renderTasks);
-        fetchStats();
-        fetchHealth();
-        fetchApkStatus();
-        setInterval(fetchStats, 5000);
-        setInterval(fetchHealth, 10000);
-        setInterval(fetchApkStatus, 3000);
-    </script>
-</body>
-</html>"""
-    return HTMLResponse(content=html_content.replace("<!-- DASHBOARD_NAV -->", dashboard_navigation("overview")))
-
-
-@app.get("/dashboard/logs", response_class=HTMLResponse)
-async def dashboard_logs():
-    logs_page = os.path.join(os.path.dirname(__file__), "dashboard_logs.html")
-    with open(logs_page, encoding="utf-8") as page:
-        return HTMLResponse(content=page.read().replace("<!-- DASHBOARD_NAV -->", dashboard_navigation("logs")))
-
-
-@app.get("/dashboard/profiles", response_class=HTMLResponse)
-async def dashboard_profiles():
-    page_path = os.path.join(os.path.dirname(__file__), "dashboard_profiles.html")
-    with open(page_path, encoding="utf-8") as page:
-        return HTMLResponse(content=page.read().replace("<!-- DASHBOARD_NAV -->", dashboard_navigation("profiles")))
 
 
 @app.get("/download/app-release.apk")

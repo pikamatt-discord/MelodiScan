@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -205,7 +206,10 @@ def test_dashboard_login_creates_private_session_and_logout_revokes_it(monkeypat
 
     with TestClient(app) as auth_client:
         login_page = auth_client.get("/login")
-        stylesheet = auth_client.get("/assets/dashboard.css")
+        script_path = re.search(r'<script[^>]+src="([^"]+\.js)"', login_page.text).group(1)
+        stylesheet_path = re.search(r'<link[^>]+href="([^"]+\.css)"', login_page.text).group(1)
+        script = auth_client.get(script_path)
+        stylesheet = auth_client.get(stylesheet_path)
         rejected = auth_client.post(
             "/auth/login",
             data={"username": "admin", "password": "wrong-password"},
@@ -216,14 +220,19 @@ def test_dashboard_login_creates_private_session_and_logout_revokes_it(monkeypat
         )
 
         assert login_page.status_code == 200
-        assert 'id="login-form"' in login_page.text
+        assert 'id="root"' in login_page.text
+        assert "dashboard-assets" in script_path
+        assert script.status_code == 200
+        assert "login-shell" in script.text
         assert stylesheet.status_code == 200
-        assert ".topbar" in stylesheet.text
+        assert ".sidebar" in stylesheet.text
         assert rejected.status_code == 401
         assert accepted.status_code == 200
         assert accepted.json()["redirect_url"] == "/dashboard"
         assert accepted.cookies[main.DASHBOARD_SESSION_COOKIE]
         assert "httponly" in accepted.headers["set-cookie"].lower()
+        assert script.headers["content-type"].startswith("text/javascript")
+        assert stylesheet.headers["content-type"].startswith("text/css")
         assert auth_client.get("/dashboard").status_code == 200
         assert auth_client.get("/api/v1/stats").status_code == 200
         assert auth_client.post("/logout", follow_redirects=False).status_code == 303
@@ -234,14 +243,12 @@ def test_dashboard_exposes_management_views_and_apk_generation():
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert 'id="stat-completed"' in response.text
-    assert 'id="service-apk_builder-dot"' in response.text
-    assert "Historique des numérisations" in response.text
-    assert "Générer l’APK" in response.text
-    assert "/api/v1/apk/build" in response.text
-    assert "/dashboard/logs" in response.text
-    assert 'aria-current="page">Vue d’ensemble' in response.text
-    assert "/assets/dashboard.css" in response.text
+    assert 'id="root"' in response.text
+    assert "MelodiScan" in response.text
+    assert "/dashboard-assets/" in response.text
+    assert client.get("/").status_code == 200
+    assert client.get("/dashboard/logs").status_code == 200
+    assert client.get("/dashboard/profiles").status_code == 200
 
 
 def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
@@ -265,10 +272,7 @@ def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
     received = client.get("/api/v1/tasks/failed-log-task/input")
 
     assert page.status_code == 200
-    assert "Logs complets" in page.text
-    assert "Traitements récents" in page.text
-    assert "Fichier reçu par le serveur" in page.text
-    assert 'aria-current="page">Traitements' in page.text
+    assert 'id="root"' in page.text
     assert logs.status_code == 200
     assert logs.json()["logs"] == complete_logs
     assert logs.json()["summary"] == main.TASK_FAILURE_SUMMARY
@@ -996,6 +1000,8 @@ def test_stats_use_task_timestamps():
     assert data["success_rate"] == 50.0
     assert data["today_scans"] == 1
     assert data["avg_processing_time_sec"] == 12.0
+    assert len(data["activity_by_day"]) == 7
+    assert sum(day["count"] for day in data["activity_by_day"]) == 1
 
 
 def test_stats_exclude_running_tasks_from_success_rate_and_hide_internal_paths():

@@ -3,15 +3,162 @@ set -Eeuo pipefail
 
 REPOSITORY_URL="https://github.com/pikamatt-discord/MelodiScan.git"
 DEFAULT_REPOSITORY="$HOME/MelodiScan"
+CURRENT_STEP="initialisation"
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  COLOR_RESET=$'\033[0m'
+  COLOR_ACCENT=$'\033[38;5;141m'
+  COLOR_SUCCESS=$'\033[38;5;114m'
+  COLOR_INFO=$'\033[38;5;110m'
+  COLOR_WARNING=$'\033[38;5;221m'
+  COLOR_ERROR=$'\033[38;5;203m'
+  COLOR_MUTED=$'\033[38;5;245m'
+else
+  COLOR_RESET=""
+  COLOR_ACCENT=""
+  COLOR_SUCCESS=""
+  COLOR_INFO=""
+  COLOR_WARNING=""
+  COLOR_ERROR=""
+  COLOR_MUTED=""
+fi
+
+section() {
+  CURRENT_STEP="$*"
+  printf '\n%b%s%b\n' "$COLOR_ACCENT" "  ━━ $* ━━" "$COLOR_RESET"
+}
+
+success() {
+  printf '  %b✓%b %s\n' "$COLOR_SUCCESS" "$COLOR_RESET" "$*"
+}
+
+info() {
+  printf '  %b›%b %s\n' "$COLOR_INFO" "$COLOR_RESET" "$*"
+}
+
+warning() {
+  printf '  %b!%b %s\n' "$COLOR_WARNING" "$COLOR_RESET" "$*"
+}
 
 fail() {
-  printf 'Erreur : %s\n' "$*" >&2
+  printf '  %b✕ Erreur :%b %s\n' "$COLOR_ERROR" "$COLOR_RESET" "$*" >&2
   exit 1
 }
 
+on_error() {
+  local status=$?
+  printf '  %b✕ Installation interrompue%b · étape « %s », ligne %s.\n' \
+    "$COLOR_ERROR" "$COLOR_RESET" "$CURRENT_STEP" "$1" >&2
+  exit "$status"
+}
+trap 'on_error "$LINENO"' ERR
+
+printf '%b' "$COLOR_ACCENT"
+cat <<'BANNER'
+  ♫  MELODISCAN
+     Installation du serveur
+BANNER
+printf '%b' "$COLOR_RESET"
+printf '  %bConfiguration sécurisée · Déploiement HTTPS · Application Android%b\n' \
+  "$COLOR_MUTED" "$COLOR_RESET"
+
+resolve_repository() {
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    git rev-parse --show-toplevel
+  elif [[ -f "$DEFAULT_REPOSITORY/docker-compose.yml" ]]; then
+    printf '%s\n' "$DEFAULT_REPOSITORY"
+  else
+    return 1
+  fi
+}
+
+ACTION="install"
+if [[ -r /dev/tty && -w /dev/tty ]]; then
+  printf '\n  Que souhaitez-vous faire ?\n' >/dev/tty
+  printf '  %b1%b  Installation complète / redéploiement\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+  printf '  %b2%b  Voir l’état des services\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+  printf '  %b3%b  Démarrer les services\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+  printf '  %b4%b  Arrêter les services\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+  printf '  %b5%b  Redémarrer les services\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+  printf '  %b6%b  Consulter les logs en direct\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+  printf '  %bq%b  Quitter\n\n' "$COLOR_ACCENT" "$COLOR_RESET" >/dev/tty
+
+  while true; do
+    printf '  Votre choix [1] : ' >/dev/tty
+    menu_choice=""
+    IFS= read -r menu_choice </dev/tty || true
+    menu_choice="${menu_choice:-1}"
+    case "$menu_choice" in
+      1) ACTION="install"; break ;;
+      2) ACTION="status"; break ;;
+      3) ACTION="start"; break ;;
+      4) ACTION="stop"; break ;;
+      5) ACTION="restart"; break ;;
+      6) ACTION="logs"; break ;;
+      q|Q) printf '  À bientôt.\n' >/dev/tty; exit 0 ;;
+      *) warning "Choix invalide. Saisissez un nombre de 1 à 6 ou q." ;;
+    esac
+  done
+fi
+
+if [[ "$ACTION" != "install" ]]; then
+  REPOSITORY_ROOT="$(resolve_repository)" ||
+    fail "Dépôt introuvable. Placez-vous dans MelodiScan ou installez-le d’abord avec l’option 1."
+  cd "$REPOSITORY_ROOT"
+  command -v docker >/dev/null 2>&1 || fail "Docker est introuvable. Lancez d’abord l’installation complète."
+  SUDO=()
+  DOCKER=(docker)
+  if ! docker info >/dev/null 2>&1; then
+    if [[ "${EUID}" -ne 0 ]] && sudo docker info >/dev/null 2>&1; then
+      SUDO=(sudo)
+      DOCKER=("${SUDO[@]}" docker)
+    else
+      fail "Docker ne répond pas. Vérifiez que le service Docker est démarré."
+    fi
+  fi
+  docker compose version >/dev/null 2>&1 ||
+    "${DOCKER[@]}" compose version >/dev/null 2>&1 ||
+    fail "Docker Compose v2 est introuvable. Lancez d’abord l’installation complète."
+  compose() {
+    "${DOCKER[@]}" compose "$@"
+  }
+
+  case "$ACTION" in
+    status)
+      section "État des services"
+      compose ps
+      ;;
+    start)
+      section "Démarrage des services"
+      compose up -d
+      success "Services démarrés"
+      ;;
+    stop)
+      section "Arrêt des services"
+      compose stop
+      success "Services arrêtés. Les données sont conservées."
+      ;;
+    restart)
+      section "Redémarrage des services"
+      compose restart
+      success "Services redémarrés"
+      ;;
+    logs)
+      section "Logs en direct · Ctrl+C pour quitter"
+      compose logs --tail=100 --follow || {
+        status=$?
+        [[ "$status" -eq 130 ]] || exit "$status"
+      }
+      ;;
+  esac
+  exit 0
+fi
+
+section "1 / 5 · Vérification de l’environnement"
 for command in curl git openssl python3; do
   command -v "$command" >/dev/null 2>&1 || {
     if command -v apt-get >/dev/null 2>&1; then
+      info "Installation des prérequis système…"
       SUDO=()
       if [[ "${EUID}" -ne 0 ]]; then SUDO=(sudo); fi
       "${SUDO[@]}" apt-get update
@@ -23,23 +170,25 @@ for command in curl git openssl python3; do
   }
 done
 
-if git rev-parse --show-toplevel >/dev/null 2>&1; then
-  REPOSITORY_ROOT="$(git rev-parse --show-toplevel)"
-elif [[ -d "$DEFAULT_REPOSITORY/.git" ]]; then
-  REPOSITORY_ROOT="$DEFAULT_REPOSITORY"
+if REPOSITORY_ROOT="$(resolve_repository)"; then
+  :
 else
+  info "Téléchargement de MelodiScan dans $DEFAULT_REPOSITORY…"
   git clone "$REPOSITORY_URL" "$DEFAULT_REPOSITORY"
   REPOSITORY_ROOT="$DEFAULT_REPOSITORY"
 fi
 
 cd "$REPOSITORY_ROOT"
 [[ -f docker-compose.yml ]] || fail "docker-compose.yml est introuvable dans $REPOSITORY_ROOT."
+success "Dépôt prêt : $REPOSITORY_ROOT"
 
+section "2 / 5 · Installation et démarrage de Docker"
 SUDO=()
 if [[ "${EUID}" -ne 0 ]]; then SUDO=(sudo); fi
 
 if ! command -v docker >/dev/null 2>&1; then
   command -v apt-get >/dev/null 2>&1 || fail "Docker est absent et apt-get n'est pas disponible."
+  info "Installation du moteur Docker et de Compose v2…"
   "${SUDO[@]}" apt-get update
   "${SUDO[@]}" apt-get install -y ca-certificates curl
   "${SUDO[@]}" install -m 0755 -d /etc/apt/keyrings
@@ -61,6 +210,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
+  info "Activation du service Docker au démarrage…"
   "${SUDO[@]}" systemctl enable --now docker ||
     fail "Impossible d'activer et démarrer Docker avec systemd."
 else
@@ -74,17 +224,20 @@ elif "${SUDO[@]}" docker info >/dev/null 2>&1; then
 else
   fail "Docker ne répond pas. Vérifiez que le service Docker est démarré."
 fi
+success "Docker et Compose sont opérationnels"
 
 compose() {
   "${DOCKER[@]}" compose "$@"
 }
 
 command -v ip >/dev/null 2>&1 || "${SUDO[@]}" apt-get install -y iproute2
+section "3 / 5 · Réseau et configuration sécurisée"
 LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
 if [[ -z "$LAN_IP" ]]; then
   LAN_IP="$(python3 -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(("192.0.2.1",80)); print(s.getsockname()[0]); s.close()')"
 fi
 [[ "$LAN_IP" != 127.* ]] || fail "Impossible de détecter une adresse IPv4 du réseau local."
+success "Adresse du serveur détectée : $LAN_IP"
 
 mkdir -p data/temp data/apk
 touch .env
@@ -109,6 +262,8 @@ set_env() {
 
 API_KEY="$(get_env API_KEY)"
 [[ -n "$API_KEY" ]] || API_KEY="$(openssl rand -hex 32)"
+DASHBOARD_SESSION_SECRET="$(get_env DASHBOARD_SESSION_SECRET)"
+[[ -n "$DASHBOARD_SESSION_SECRET" ]] || DASHBOARD_SESSION_SECRET="$(openssl rand -hex 32)"
 DASHBOARD_PASSWORD="$(get_env DASHBOARD_PASSWORD)"
 [[ -n "$DASHBOARD_PASSWORD" ]] || DASHBOARD_PASSWORD="$(openssl rand -hex 16)"
 DASHBOARD_USERNAME="$(get_env DASHBOARD_USERNAME)"
@@ -116,6 +271,7 @@ DASHBOARD_USERNAME="$(get_env DASHBOARD_USERNAME)"
 [[ "$DASHBOARD_USERNAME" =~ ^[A-Za-z0-9._-]+$ ]] ||
   fail "DASHBOARD_USERNAME doit contenir uniquement lettres, chiffres, point, tiret ou souligné."
 set_env API_KEY "$API_KEY"
+set_env DASHBOARD_SESSION_SECRET "$DASHBOARD_SESSION_SECRET"
 set_env DASHBOARD_USERNAME "$DASHBOARD_USERNAME"
 set_env DASHBOARD_PASSWORD "$DASHBOARD_PASSWORD"
 set_env MELODISCAN_HOST "$LAN_IP"
@@ -123,9 +279,9 @@ set_env MELODISCAN_HOST "$LAN_IP"
 GEMINI_API_KEY="${GEMINI_API_KEY:-$(get_env GEMINI_API_KEY)}"
 if [[ -r /dev/tty && -w /dev/tty ]]; then
   if [[ -n "$GEMINI_API_KEY" ]]; then
-    printf 'Une clé Gemini est déjà configurée. Saisissez une nouvelle clé, Entrée pour la conserver ou - pour la désactiver : ' >/dev/tty
+    printf '  Une clé Gemini existe. Nouvelle clé, Entrée pour conserver ou - pour désactiver : ' >/dev/tty
   else
-    printf 'Clé API Gemini pour la détection des titres (facultatif, Entrée pour ignorer) : ' >/dev/tty
+    printf '  Clé API Gemini pour la détection des titres (facultatif, Entrée pour ignorer) : ' >/dev/tty
   fi
   IFS= read -r -s GEMINI_API_KEY_INPUT </dev/tty || true
   printf '\n' >/dev/tty
@@ -145,16 +301,17 @@ if [[ ! -s data/android-config/debug.keystore ]]; then
   if "${DOCKER[@]}" cp melodiscan_apk_builder:/root/.android/debug.keystore \
     data/android-config/debug.keystore >/dev/null 2>&1; then
     chmod 600 data/android-config/debug.keystore
-    printf 'Clé de signature APK existante conservée pour permettre les mises à jour de l’application.\n'
+    success "Clé de signature APK existante conservée pour les prochaines mises à jour"
   else
-    printf 'Aucune clé APK précédente détectée; la clé de signature sera conservée pour les prochaines compilations.\n'
+    info "Aucune clé APK précédente : une clé sera conservée pour les prochaines compilations"
   fi
 fi
 
-printf 'Démarrage des services MelodiScan sur https://%s ...\n' "$LAN_IP"
+section "4 / 5 · Déploiement des services"
+info "Construction et démarrage des services sur https://$LAN_IP…"
 compose up -d --build
 
-printf 'Attente du certificat HTTPS local de Caddy...\n'
+info "Attente du certificat HTTPS local de Caddy…"
 ca_ready=false
 for attempt in $(seq 1 30); do
   if "${DOCKER[@]}" cp melodiscan_https:/data/caddy/pki/authorities/local/root.crt \
@@ -163,7 +320,7 @@ for attempt in $(seq 1 30); do
     break
   fi
   if (( attempt % 10 == 0 )); then
-    printf 'Caddy initialise encore son certificat (%s/30 s)...\n' "$attempt"
+    info "Caddy initialise son certificat (${attempt}/30 s)…"
   fi
   sleep 1
 done
@@ -174,9 +331,11 @@ if [[ "$ca_ready" != true ]]; then
   compose logs --tail=40 melodiscan-https >&2 || true
   fail "Le certificat racine Caddy n'a pas été généré après 30 secondes."
 fi
-printf 'Certificat HTTPS récupéré. Rechargement de Caddy et du générateur avec la CA...\n'
+success "Certificat HTTPS récupéré"
+info "Redémarrage de Caddy et du générateur avec le certificat…"
 compose up -d --force-recreate melodiscan-https melodiscan-apk-builder
-printf 'Caddy et le générateur redémarrés. Vérification des services...\n'
+success "Services HTTPS rechargés"
+info "Vérification de l’API, de Redis, du worker, d’Audiveris et du générateur APK…"
 
 BASE_URL="https://${LAN_IP}"
 HEALTH_URL="${BASE_URL}/health"
@@ -208,8 +367,7 @@ try:
 except (json.JSONDecodeError, AttributeError):
  print("réponse HTTPS ou JSON indisponible")
 ' 2>/dev/null || printf 'réponse HTTPS ou JSON indisponible')"
-    printf 'En attente de /health (%s/120 s) : HTTP %s; %s\n' \
-      "$((attempt * 2))" "$health_status" "$health_summary"
+    info "Démarrage en cours ($((attempt * 2))/120 s) · HTTP $health_status · $health_summary"
   fi
   sleep 2
 done
@@ -235,7 +393,7 @@ if command -v update-ca-certificates >/dev/null 2>&1; then
   "${SUDO[@]}" update-ca-certificates
 fi
 
-printf 'URL HTTPS vérifiée : %s (GET /health : HTTP 200, Redis/worker/Audiveris/générateur APK opérationnels)\n' "$BASE_URL"
+success "Tous les services répondent sur HTTPS"
 fingerprint_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
   --connect-timeout 5 --write-out $'\n%{http_code}' \
   -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/fingerprint")" ||
@@ -245,6 +403,7 @@ fingerprint_body="${fingerprint_response%$'\n'*}"
 [[ "$fingerprint_http_status" == 200 ]] ||
   fail "Impossible de calculer l’empreinte de l’APK (HTTP ${fingerprint_http_status})."
 
+section "5 / 5 · Préparation de l’application Android"
 if printf '%s' "$fingerprint_body" | python3 -c '
 import json,sys
 data=json.load(sys.stdin)
@@ -254,10 +413,10 @@ sys.exit(0 if fingerprint and apk.get("available") is True
          and apk.get("signature_verified") is True
          and apk.get("input_fingerprint") == fingerprint else 1)
 '; then
-  printf 'APK déjà à jour : sources mobiles et configuration inchangées; compilation ignorée.\n'
+  success "APK déjà à jour · sources et configuration inchangées"
 else
-  printf 'APK absent ou sources/configuration modifiées; génération de l’APK Android Release...\n'
-  printf 'Le premier build après une modification peut prendre plusieurs minutes.\n'
+  info "Génération de l’APK Android Release…"
+  info "La première compilation après une modification peut prendre plusieurs minutes."
   build_response="$(curl --cacert data/caddy-root.crt --silent --show-error \
     --connect-timeout 5 --write-out $'\n%{http_code}' \
     -X POST -H "X-API-Key: ${API_KEY}" "${BASE_URL}/api/v1/apk/build")" ||
@@ -293,7 +452,7 @@ else
       build_progress="$(printf '%s' "$build_body" | python3 -c \
         'import json,sys; print(json.load(sys.stdin).get("progress","Compilation toujours en cours"))' \
         2>/dev/null || printf 'Compilation toujours en cours')"
-      printf '%s (%.0f s)...\n' "$build_progress" "$((attempt * 2))"
+      info "$build_progress · $((attempt * 2)) s écoulées"
     fi
     sleep 2
   done
@@ -302,16 +461,20 @@ fi
 [[ -s data/apk/app-release.apk ]] ||
   fail "L’APK est déclaré disponible, mais data/apk/app-release.apk est absent."
 
-printf '\nInstallation terminée.\n'
-printf 'Dashboard : %s/dashboard\n' "$BASE_URL"
-printf 'URL API préconfigurée et vérifiée : %s (GET %s/health = HTTP 200)\n' "$BASE_URL" "$BASE_URL"
-printf 'Identifiant dashboard : %s\n' "$DASHBOARD_USERNAME"
-printf 'Mot de passe dashboard : %s\n' "$DASHBOARD_PASSWORD"
+success "APK Android Release disponible"
+
+section "Installation terminée"
+printf '  Tableau de bord   %s/dashboard\n' "$BASE_URL"
+printf '  API vérifiée      %s  %bHTTP 200%b\n' "$BASE_URL" "$COLOR_SUCCESS" "$COLOR_RESET"
+printf '  Identifiant       %s\n' "$DASHBOARD_USERNAME"
+printf '  Mot de passe      %s\n' "$DASHBOARD_PASSWORD"
 if [[ -n "$GEMINI_API_KEY" ]]; then
-  printf 'Détection du titre : Gemini configuré sur le worker.\n'
+  printf '  Détection du titre Gemini configurée sur le worker\n'
 else
-  printf 'Détection du titre : Gemini désactivé (aucune clé GEMINI_API_KEY configurée).\n'
+  printf '  Détection du titre Gemini désactivée\n'
 fi
-printf 'APK Android : %s/data/apk/app-release.apk\n' "$REPOSITORY_ROOT"
-printf 'Téléchargement APK : %s/download/app-release.apk\n' "$BASE_URL"
-printf 'L’application mobile est préconfigurée ; aucun DNS ni certificat à installer sur le téléphone.\n'
+printf '  Application       %s/download/app-release.apk\n' "$BASE_URL"
+printf '  Fichier APK       %s/data/apk/app-release.apk\n' "$REPOSITORY_ROOT"
+printf '\n  %bL’application est préconfigurée. Aucun DNS ni certificat à installer sur le téléphone.%b\n' \
+  "$COLOR_MUTED" "$COLOR_RESET"
+warning "Conservez vos identifiants en lieu sûr et ne partagez pas cette sortie."
