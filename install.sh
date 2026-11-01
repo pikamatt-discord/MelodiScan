@@ -120,6 +120,25 @@ set_env DASHBOARD_USERNAME "$DASHBOARD_USERNAME"
 set_env DASHBOARD_PASSWORD "$DASHBOARD_PASSWORD"
 set_env MELODISCAN_HOST "$LAN_IP"
 
+GEMINI_API_KEY="${GEMINI_API_KEY:-$(get_env GEMINI_API_KEY)}"
+if [[ -r /dev/tty && -w /dev/tty ]]; then
+  if [[ -n "$GEMINI_API_KEY" ]]; then
+    printf 'Une clé Gemini est déjà configurée. Saisissez une nouvelle clé, Entrée pour la conserver ou - pour la désactiver : ' >/dev/tty
+  else
+    printf 'Clé API Gemini pour la détection des titres (facultatif, Entrée pour ignorer) : ' >/dev/tty
+  fi
+  IFS= read -r -s GEMINI_API_KEY_INPUT </dev/tty || true
+  printf '\n' >/dev/tty
+  if [[ "${GEMINI_API_KEY_INPUT:-}" == "-" ]]; then
+    GEMINI_API_KEY=""
+  elif [[ -n "${GEMINI_API_KEY_INPUT:-}" ]]; then
+    GEMINI_API_KEY="$GEMINI_API_KEY_INPUT"
+  fi
+  unset GEMINI_API_KEY_INPUT
+fi
+set_env GEMINI_API_KEY "$GEMINI_API_KEY"
+chmod 600 .env
+
 mkdir -p data/android-config
 chmod 700 data/android-config
 if [[ ! -s data/android-config/debug.keystore ]]; then
@@ -288,6 +307,11 @@ printf 'Dashboard : %s/dashboard\n' "$BASE_URL"
 printf 'URL API préconfigurée et vérifiée : %s (GET %s/health = HTTP 200)\n' "$BASE_URL" "$BASE_URL"
 printf 'Identifiant dashboard : %s\n' "$DASHBOARD_USERNAME"
 printf 'Mot de passe dashboard : %s\n' "$DASHBOARD_PASSWORD"
+if [[ -n "$GEMINI_API_KEY" ]]; then
+  printf 'Détection du titre : Gemini configuré sur le worker.\n'
+else
+  printf 'Détection du titre : Gemini désactivé (aucune clé GEMINI_API_KEY configurée).\n'
+fi
 printf 'APK Android : %s/data/apk/app-release.apk\n' "$REPOSITORY_ROOT"
 printf 'Téléchargement APK : %s/download/app-release.apk\n' "$BASE_URL"
 printf 'L’application mobile est préconfigurée ; aucun DNS ni certificat à installer sur le téléphone.\n'

@@ -37,7 +37,7 @@ flutter_launcher_icons:
   image_path: assets/images/melodiscan_icon.png
   adaptive_icon_background: "#0D0E15"
   adaptive_icon_foreground: assets/images/melodiscan_icon_foreground.png
-  adaptive_icon_foreground_inset: 0
+  adaptive_icon_foreground_inset: 14
 
 flutter:
   uses-material-design: true

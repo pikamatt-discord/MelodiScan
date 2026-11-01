@@ -423,9 +423,10 @@ class _ScanScreenState extends State<ScanScreen> {
                     ),
                     title: const Text('Réglages avancés'),
                     subtitle: const Text('Serveur et clé API'),
-                    childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+                    childrenPadding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
                     children: [
                       TextField(
+                        key: const Key('advanced_server_url_field'),
                         controller: _serverUrlController,
                         keyboardType: TextInputType.url,
                         decoration: const InputDecoration(
@@ -437,6 +438,7 @@ class _ScanScreenState extends State<ScanScreen> {
                       ),
                       const SizedBox(height: 12),
                       TextField(
+                        key: const Key('advanced_api_key_field'),
                         controller: _apiKeyController,
                         obscureText: true,
                         autocorrect: false,

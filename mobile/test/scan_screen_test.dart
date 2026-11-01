@@ -43,5 +43,15 @@ void main() {
     expect(find.text('Clé API (si configurée sur le serveur)'), findsOneWidget);
     expect(find.text('Titre (facultatif)'), findsNothing);
     expect(find.text('Serveur, clé API et titre du morceau'), findsNothing);
+    final serverField = tester.getRect(
+      find.byKey(const Key('advanced_server_url_field')),
+    );
+    final apiKeyField = tester.getRect(
+      find.byKey(const Key('advanced_api_key_field')),
+    );
+    expect(apiKeyField.left, serverField.left);
+    expect(apiKeyField.width, serverField.width);
+    expect(serverField.top, greaterThan(0));
+    expect(tester.takeException(), isNull);
   });
 }
