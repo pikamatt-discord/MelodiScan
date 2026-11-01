@@ -13,6 +13,7 @@ import 'player_configuration_screen.dart';
 import '../services/midi_configuration.dart';
 import '../services/midi_playback.dart';
 import '../widgets/traditional_score.dart';
+import '../widgets/melodiscan_background.dart';
 
 class PlayerScreen extends StatefulWidget {
   final String taskId;
@@ -687,17 +688,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
         ],
       ),
-      body: SafeArea(
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _errorMessage != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: _buildError(theme),
-                    ),
-                  )
-                : _buildMidiResult(theme),
+      body: MelodiScanBackground(
+        child: SafeArea(
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _errorMessage != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: _buildError(theme),
+                      ),
+                    )
+                  : _buildMidiResult(theme),
+        ),
       ),
     );
   }

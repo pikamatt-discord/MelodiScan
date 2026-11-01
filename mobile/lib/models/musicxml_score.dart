@@ -21,6 +21,8 @@ class ScoreNote {
     required this.normalNotes,
     required this.isGrace,
     required this.ties,
+    required this.tupletsStarted,
+    required this.tupletsStopped,
   });
 
   final String step;
@@ -38,6 +40,8 @@ class ScoreNote {
   final int? normalNotes;
   final bool isGrace;
   final Set<String> ties;
+  final Set<String> tupletsStarted;
+  final Set<String> tupletsStopped;
 }
 
 class ScoreMeasure {
@@ -300,6 +304,20 @@ class MusicXmlScore {
                   ? ''
                   : _text(timeModification, 'normal-notes') ?? '',
             );
+            final notations = _children(element, 'notations');
+            final tupletsStarted = <String>{};
+            final tupletsStopped = <String>{};
+            for (final notation in notations) {
+              for (final tuplet in _children(notation, 'tuplet')) {
+                final number = tuplet.getAttribute('number') ?? '1';
+                switch (tuplet.getAttribute('type')) {
+                  case 'start':
+                    tupletsStarted.add(number);
+                  case 'stop':
+                    tupletsStopped.add(number);
+                }
+              }
+            }
             notes.add(ScoreNote(
               step: step ?? '',
               octave: octave ?? 0,
@@ -324,6 +342,8 @@ class MusicXmlScore {
                 for (final tie in _children(element, 'tie'))
                   if (tie.getAttribute('type') case final type?) type,
               },
+              tupletsStarted: Set.unmodifiable(tupletsStarted),
+              tupletsStopped: Set.unmodifiable(tupletsStopped),
             ));
           }
           if (!isChord) {

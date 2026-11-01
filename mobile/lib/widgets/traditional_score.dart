@@ -205,6 +205,9 @@ class _ScoreSystemPainter extends CustomPainter {
     final staffWidth = size.width - _left - _right;
     final measureWidth = staffWidth / measures.length;
     final tieStarts = <(int, String, int, int), (double, double)>{};
+    final tupletStarts = <(int, String, String), (double, int?, int?)>{};
+    final tupletsToDraw =
+        <({double startX, double endX, int staff, int? actual, int? normal})>[];
 
     for (var staff = 1; staff <= (isGrandStaff ? 2 : 1); staff++) {
       final top = _staffTopFor(staff);
@@ -316,10 +319,17 @@ class _ScoreSystemPainter extends CustomPainter {
         }
         final actualNotes = note.actualNotes;
         final normalNotes = note.normalNotes;
+        for (final number in note.tupletsStarted) {
+          tupletStarts[(note.staff, note.voice, number)] =
+              (x, actualNotes, normalNotes);
+        }
         if (actualNotes != null &&
             normalNotes != null &&
             actualNotes > 1 &&
-            actualNotes != normalNotes) {
+            actualNotes != normalNotes &&
+            !tupletStarts.keys.any(
+              (group) => group.$1 == note.staff && group.$2 == note.voice,
+            )) {
           final group = (note.staff, note.voice, actualNotes, normalNotes);
           final remaining = tupletNotesRemaining[group] ?? 0;
           if (remaining == 0) {
@@ -345,7 +355,31 @@ class _ScoreSystemPainter extends CustomPainter {
           false,
           staffTop,
         );
+        for (final number in note.tupletsStopped) {
+          final start = tupletStarts.remove((note.staff, note.voice, number));
+          if (start != null) {
+            tupletsToDraw.add((
+              startX: start.$1,
+              endX: x,
+              staff: note.staff,
+              actual: start.$2 ?? actualNotes,
+              normal: start.$3 ?? normalNotes,
+            ));
+          }
+        }
       }
+    }
+
+    for (final tuplet in tupletsToDraw) {
+      _drawTupletBracket(
+        canvas,
+        tuplet.startX,
+        tuplet.endX,
+        _staffTopFor(tuplet.staff),
+        tuplet.actual == null || tuplet.normal == null
+            ? '${tuplet.actual ?? ''}'
+            : '${tuplet.actual}:${tuplet.normal}',
+      );
     }
 
     final endX = _left + measures.length * measureWidth;
@@ -401,6 +435,39 @@ class _ScoreSystemPainter extends CustomPainter {
         ..color = const Color(0xFF171717)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2,
+    );
+  }
+
+  void _drawTupletBracket(
+    Canvas canvas,
+    double startX,
+    double endX,
+    double staffTop,
+    String label,
+  ) {
+    final y = staffTop - 12;
+    final centerX = (startX + endX) / 2;
+    const labelWidth = 20.0;
+    final paint = Paint()
+      ..color = const Color(0xFF555555)
+      ..strokeWidth = 0.9;
+    canvas.drawLine(Offset(startX, y), Offset(startX, y + 4), paint);
+    canvas.drawLine(Offset(endX, y), Offset(endX, y + 4), paint);
+    if (endX - startX > labelWidth + 4) {
+      canvas.drawLine(
+          Offset(startX, y), Offset(centerX - labelWidth / 2, y), paint);
+      canvas.drawLine(
+          Offset(centerX + labelWidth / 2, y), Offset(endX, y), paint);
+    } else {
+      canvas.drawLine(Offset(startX, y), Offset(endX, y), paint);
+    }
+    _drawText(
+      canvas,
+      label,
+      Offset(centerX, y - 9),
+      8,
+      const Color(0xFF555555),
+      centered: true,
     );
   }
 
@@ -552,7 +619,13 @@ class _ScoreSystemPainter extends CustomPainter {
         'whole' => '𝄻',
         'half' => '𝄼',
         'eighth' => '𝄾',
-        '16th' || '32nd' || '64th' => '𝄿',
+        '16th' => '𝄿',
+        '32nd' => String.fromCharCode(0x1D140),
+        '64th' => String.fromCharCode(0x1D141),
+        '128th' => String.fromCharCode(0x1D142),
+        '256th' => String.fromCharCode(0x1D143),
+        '512th' => String.fromCharCode(0x1D144),
+        '1024th' => String.fromCharCode(0x1D145),
         _ => '𝄽',
       };
       _drawText(
@@ -630,6 +703,10 @@ class _ScoreSystemPainter extends CustomPainter {
         '16th' => 2,
         '32nd' => 3,
         '64th' => 4,
+        '128th' => 5,
+        '256th' => 6,
+        '512th' => 7,
+        '1024th' => 8,
         _ => 0,
       };
       for (var flag = 0; flag < flagCount; flag++) {

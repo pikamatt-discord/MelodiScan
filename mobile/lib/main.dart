@@ -11,14 +11,14 @@ class MelodiScanApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const primaryAccent = Color(0xFF9D4EDD);
-    const secondaryAccent = Color(0xFF06D6A0);
-    const darkBackground = Color(0xFF0D1016);
-    const surfaceColor = Color(0xFF171B24);
-    const surfaceElevated = Color(0xFF202634);
+    const primaryAccent = Color(0xFFB69CFF);
+    const secondaryAccent = Color(0xFF74E6D1);
+    const darkBackground = Color(0xFF0B101B);
+    const surfaceColor = Color(0xFF151C2B);
+    const surfaceElevated = Color(0xFF1B2638);
 
     return MaterialApp(
-      title: 'MelodiScan Enterprise',
+      title: 'MelodiScan',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.dark,
       darkTheme: ThemeData.dark().copyWith(
@@ -33,23 +33,24 @@ class MelodiScanApp extends StatelessWidget {
         ),
         cardTheme: CardThemeData(
           color: surfaceColor,
-          elevation: 1,
-          shadowColor: Colors.black.withAlpha(70),
+          elevation: 0,
+          shadowColor: Colors.transparent,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(color: Colors.white.withAlpha(12), width: 1),
+            borderRadius: BorderRadius.circular(22),
+            side: BorderSide(color: Colors.white.withAlpha(14), width: 1),
           ),
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF12151B),
+          backgroundColor: Colors.transparent,
           elevation: 0,
           centerTitle: false,
           titleTextStyle: TextStyle(
             fontSize: 18,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 0.5,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.1,
             color: Colors.white,
           ),
+          surfaceTintColor: Colors.transparent,
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -80,11 +81,17 @@ class MelodiScanApp extends StatelessWidget {
         ),
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(52),
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(16),
             ),
           ),
         ),
+        textTheme: ThemeData.dark().textTheme.apply(
+              bodyColor: const Color(0xFFF4F1FA),
+              displayColor: const Color(0xFFF4F1FA),
+            ),
       ),
       home: const ScanScreen(),
     );

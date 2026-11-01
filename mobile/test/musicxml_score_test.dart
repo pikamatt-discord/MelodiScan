@@ -141,6 +141,59 @@ void main() {
     expect(score.measures.single.notes.map((note) => note.endTick), [32, 32]);
   });
 
+  test('preserves tuplet boundaries and very short note values', () {
+    const musicXml = '''
+      <score-partwise>
+        <part id="P1">
+          <measure number="1">
+            <attributes>
+              <divisions>192</divisions>
+              <time><beats>4</beats><beat-type>4</beat-type></time>
+            </attributes>
+            <note>
+              <pitch><step>C</step><octave>5</octave></pitch>
+              <duration>64</duration><type>eighth</type>
+              <time-modification>
+                <actual-notes>3</actual-notes><normal-notes>2</normal-notes>
+              </time-modification>
+              <notations><tuplet type="start" number="1"/></notations>
+            </note>
+            <note>
+              <pitch><step>D</step><octave>5</octave></pitch>
+              <duration>64</duration><type>eighth</type>
+              <time-modification>
+                <actual-notes>3</actual-notes><normal-notes>2</normal-notes>
+              </time-modification>
+            </note>
+            <note>
+              <pitch><step>E</step><octave>5</octave></pitch>
+              <duration>64</duration><type>eighth</type>
+              <time-modification>
+                <actual-notes>3</actual-notes><normal-notes>2</normal-notes>
+              </time-modification>
+              <notations><tuplet type="stop" number="1"/></notations>
+            </note>
+            <note>
+              <pitch><step>F</step><octave>5</octave></pitch>
+              <duration>3</duration><type>128th</type>
+            </note>
+          </measure>
+        </part>
+      </score-partwise>
+    ''';
+
+    final score = MusicXmlScore.parse(musicXml, ticksPerBeat: 96);
+    final notes = score.measures.single.notes;
+
+    expect(notes[0].tupletsStarted, {'1'});
+    expect(notes[1].tupletsStarted, isEmpty);
+    expect(notes[2].tupletsStopped, {'1'});
+    expect(notes[0].actualNotes, 3);
+    expect(notes[0].normalNotes, 2);
+    expect(notes[3].noteType, '128th');
+    expect(notes[3].endTick - notes[3].startTick, 2);
+  });
+
   test('rejects MusicXML with no part', () {
     expect(
       () => MusicXmlScore.parse(

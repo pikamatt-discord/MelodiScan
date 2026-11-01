@@ -23,9 +23,16 @@ void main() {
 
     expect(find.text('Aucun fichier sélectionné'), findsOneWidget);
     expect(find.text('Lancer la reconnaissance OMR'), findsOneWidget);
+    expect(find.text('Réglages avancés'), findsOneWidget);
     final buttons = tester.widgetList<ElevatedButton>(
       find.byWidgetPredicate((widget) => widget is ElevatedButton),
     );
     expect(buttons.any((button) => button.onPressed == null), isTrue);
+
+    await tester.ensureVisible(find.text('Réglages avancés'));
+    await tester.tap(find.text('Réglages avancés'));
+    await tester.pumpAndSettle();
+    expect(find.text('URL du serveur'), findsOneWidget);
+    expect(find.text('Clé API (si configurée sur le serveur)'), findsOneWidget);
   });
 }
