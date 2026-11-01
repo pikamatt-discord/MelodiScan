@@ -1,7 +1,118 @@
+import copy
 import os
+import re
 import subprocess
 import zipfile
 from xml.etree import ElementTree
+
+
+def _read_musicxml_from_mxl(output_mxl: str, diagnostics: str) -> bytes:
+    try:
+        with zipfile.ZipFile(output_mxl) as archive:
+            container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
+            rootfile = next(
+                (
+                    element
+                    for element in container.iter()
+                    if element.tag.rsplit("}", 1)[-1] == "rootfile"
+                ),
+                None,
+            )
+            musicxml_entry = rootfile.get("full-path") if rootfile is not None else None
+            if not musicxml_entry:
+                raise OMRProcessingError(
+                    "Audiveris exported an MXL file without a MusicXML rootfile."
+                )
+            musicxml_content = archive.read(musicxml_entry)
+        if not musicxml_content:
+            raise OMRProcessingError(
+                "Audiveris exported an empty MusicXML document inside the MXL file."
+            )
+        return musicxml_content
+    except (zipfile.BadZipFile, KeyError, ElementTree.ParseError, OSError) as exc:
+        raise OMRProcessingError(
+            f"Could not read MusicXML from Audiveris MXL export '{output_mxl}': {exc}",
+            diagnostics,
+        ) from exc
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _part_names(root: ElementTree.Element) -> dict[str, str]:
+    part_list = next(
+        (element for element in root if _local_name(element.tag) == "part-list"),
+        None,
+    )
+    if part_list is None:
+        return {}
+    return {
+        part.get("id"): " ".join((name.text or "").split()).casefold()
+        for part in part_list
+        if _local_name(part.tag) == "score-part" and part.get("id")
+        for name in part
+        if _local_name(name.tag) == "part-name"
+    }
+
+
+def _merge_movement_musicxml(movements: list[bytes]) -> bytes:
+    try:
+        roots = [ElementTree.fromstring(content) for content in movements]
+    except ElementTree.ParseError as exc:
+        raise OMRProcessingError(
+            f"Could not parse Audiveris movement MusicXML: {exc}"
+        ) from exc
+
+    merged_root = copy.deepcopy(roots[0])
+    target_parts = {
+        part.get("id"): part
+        for part in merged_root
+        if _local_name(part.tag) == "part" and part.get("id")
+    }
+    if not target_parts or any(
+        _local_name(root.tag) != _local_name(merged_root.tag) for root in roots
+    ):
+        raise OMRProcessingError(
+            "Audiveris movement exports do not contain compatible partwise MusicXML."
+        )
+
+    target_names = _part_names(merged_root)
+    names_to_ids: dict[str, list[str]] = {}
+    for part_id, name in target_names.items():
+        names_to_ids.setdefault(name, []).append(part_id)
+
+    for root in roots[1:]:
+        source_names = _part_names(root)
+        source_parts = [part for part in root if _local_name(part.tag) == "part"]
+        matched_parts: set[str] = set()
+        for source_part in source_parts:
+            source_id = source_part.get("id")
+            target_id = source_id if source_id in target_parts else None
+            if target_id is None:
+                source_name = source_names.get(source_id)
+                matches = names_to_ids.get(source_name or "", [])
+                if len(matches) == 1:
+                    target_id = matches[0]
+            if target_id is None or target_id in matched_parts:
+                raise OMRProcessingError(
+                    "Audiveris movement exports have incompatible or ambiguous parts."
+                )
+            matched_parts.add(target_id)
+            target_part = target_parts[target_id]
+            target_part.extend(
+                copy.deepcopy(measure)
+                for measure in source_part
+                if _local_name(measure.tag) == "measure"
+            )
+        if matched_parts != set(target_parts):
+            raise OMRProcessingError(
+                "Audiveris movement exports do not contain the same set of parts."
+            )
+
+    return ElementTree.tostring(
+        merged_root, encoding="utf-8", xml_declaration=True
+    )
 
 
 class OMRProcessingError(RuntimeError):
@@ -74,39 +185,31 @@ class OMREngine:
             raise OMRProcessingError(
                 f"Audiveris failed with exit code {res.returncode}.", output
             )
+        movement_exports = []
+        movement_pattern = re.compile(
+            rf"^{re.escape(base_name)}\.mvt(\d+)\.mxl$"
+        )
+        for filename in os.listdir(output_dir):
+            match = movement_pattern.match(filename)
+            if match:
+                movement_exports.append(
+                    (int(match.group(1)), os.path.join(output_dir, filename))
+                )
+        if movement_exports:
+            movement_contents = [
+                _read_musicxml_from_mxl(path, output)
+                for _, path in sorted(movement_exports)
+            ]
+            with open(output_musicxml, "wb") as musicxml_file:
+                musicxml_file.write(_merge_movement_musicxml(movement_contents))
+            return output_musicxml
+
         output_mxl = os.path.join(output_dir, f"{base_name}.mxl")
         if os.path.isfile(output_mxl) and os.path.getsize(output_mxl) > 0:
-            try:
-                with zipfile.ZipFile(output_mxl) as archive:
-                    container = ElementTree.fromstring(
-                        archive.read("META-INF/container.xml")
-                    )
-                    rootfile = next(
-                        (
-                            element
-                            for element in container.iter()
-                            if element.tag.rsplit("}", 1)[-1] == "rootfile"
-                        ),
-                        None,
-                    )
-                    musicxml_entry = rootfile.get("full-path") if rootfile is not None else None
-                    if not musicxml_entry:
-                        raise OMRProcessingError(
-                            "Audiveris exported an MXL file without a MusicXML rootfile."
-                        )
-                    musicxml_content = archive.read(musicxml_entry)
-                if not musicxml_content:
-                    raise OMRProcessingError(
-                        "Audiveris exported an empty MusicXML document inside the MXL file."
-                    )
-                with open(output_musicxml, "wb") as musicxml_file:
-                    musicxml_file.write(musicxml_content)
-                return output_musicxml
-            except (zipfile.BadZipFile, KeyError, ElementTree.ParseError, OSError) as exc:
-                raise OMRProcessingError(
-                    f"Could not read MusicXML from Audiveris MXL export '{output_mxl}': {exc}",
-                    output,
-                ) from exc
+            musicxml_content = _read_musicxml_from_mxl(output_mxl, output)
+            with open(output_musicxml, "wb") as musicxml_file:
+                musicxml_file.write(musicxml_content)
+            return output_musicxml
         if not os.path.isfile(output_musicxml) or os.path.getsize(output_musicxml) == 0:
             raise OMRProcessingError(
                 "Audiveris completed without producing a non-empty MusicXML file "

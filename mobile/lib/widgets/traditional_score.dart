@@ -714,12 +714,12 @@ class _ScoreSystemPainter extends CustomPainter {
         final path = Path()
           ..moveTo(stemX, flagY)
           ..cubicTo(
-            stemX + (stemDown ? 9 : 8),
-            flagY + (stemDown ? 5 : 6),
-            stemX + (stemDown ? 10 : 9),
-            flagY + 13,
-            stemX + (stemDown ? 3 : 2),
-            flagY + 17,
+            stemX + (stemDown ? -8 : 8),
+            flagY + (stemDown ? -6 : 6),
+            stemX + (stemDown ? -9 : 9),
+            flagY + (stemDown ? -13 : 13),
+            stemX + (stemDown ? -2 : 2),
+            flagY + (stemDown ? -17 : 17),
           );
         canvas.drawPath(
           path,

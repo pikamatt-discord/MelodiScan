@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 from zipfile import ZIP_DEFLATED, ZipFile
+from xml.etree import ElementTree
 
 import pytest
 from fastapi.testclient import TestClient
@@ -385,6 +386,51 @@ def test_omr_engine_converts_audiveris_mxl_export_to_musicxml(tmp_path, monkeypa
 
     assert result == str(output_musicxml)
     assert output_musicxml.read_bytes() == musicxml
+
+
+def test_omr_engine_merges_audiveris_movement_exports(tmp_path, monkeypatch):
+    container = (
+        b'<?xml version="1.0"?><container><rootfiles>'
+        b'<rootfile full-path="scores/score.xml" '
+        b'media-type="application/vnd.recordare.musicxml+xml"/>'
+        b"</rootfiles></container>"
+    )
+    movements = {
+        1: b"<score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name>"
+        b"</score-part></part-list><part id='P1'><measure number='1'/></part></score-partwise>",
+        2: b"<score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name>"
+        b"</score-part></part-list><part id='P1'><measure number='2'/></part></score-partwise>",
+    }
+
+    class ProcessResult:
+        returncode = 0
+        stderr = b""
+        stdout = b"Exported movement files"
+
+    def run(_command, **_kwargs):
+        for movement_number, musicxml in movements.items():
+            output_mxl = tmp_path / f"score.mvt{movement_number}.mxl"
+            with ZipFile(output_mxl, "w", ZIP_DEFLATED) as archive:
+                archive.writestr("META-INF/container.xml", container)
+                archive.writestr("scores/score.xml", musicxml)
+        return ProcessResult()
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
+
+    result = OMREngine().process_score(
+        str(tmp_path / "score.pdf"), str(tmp_path)
+    )
+
+    assert result == str(tmp_path / "score.musicxml")
+    root = ElementTree.parse(result).getroot()
+    measures = [
+        measure.get("number")
+        for part in root
+        if part.tag == "part"
+        for measure in part
+        if measure.tag == "measure"
+    ]
+    assert measures == ["1", "2"]
 
 
 def test_omr_engine_rejects_mxl_without_musicxml_container(tmp_path, monkeypatch):
