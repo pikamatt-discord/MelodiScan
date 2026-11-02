@@ -91,13 +91,13 @@ fi
 if [[ "$DOCKER_READY" -eq 1 ]]; then
   run_check "configuration Docker Compose" docker compose "${COMPOSE_ENV_ARGS[@]}" config --quiet
   PREVIOUS_FAIL_COUNT="$FAIL_COUNT"
-  run_check "build backend + Audiveris + tests pytest" \
+  run_check "build backend + Oemer + tests pytest" \
     docker compose "${COMPOSE_ENV_ARGS[@]}" --profile test run --build --rm melodiscan-test-runner
   [[ "$FAIL_COUNT" -eq "$PREVIOUS_FAIL_COUNT" ]] && BACKEND_TESTS_OK=1 || BACKEND_TESTS_OK=0
 else
   BACKEND_TESTS_OK=0
   skip "Configuration Compose non validée sans daemon Docker."
-  skip "Image Audiveris et suite pytest backend non validées sans daemon Docker."
+  skip "Image Oemer et suite pytest backend non validées sans daemon Docker."
   skip "Parcours HTTPS/API/Celery/Redis/OMR non validé sans daemon Docker."
   BLOCKED=1
 fi

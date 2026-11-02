@@ -24,6 +24,7 @@ dependencies:
   dart_midi_pro: 1.0.4+2
   shared_preferences: ^2.5.3
   xml: ^6.6.1
+  verovio_flutter: ^0.3.3
 
 dev_dependencies:
   flutter_test:
@@ -44,3 +45,4 @@ flutter:
   assets:
     - assets/images/melodiscan_logo.svg
     - assets/soundfonts/COPYRIGHT.txt
+    - assets/soundfonts/instruments.sf2

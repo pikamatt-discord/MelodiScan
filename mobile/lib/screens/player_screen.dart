@@ -12,8 +12,8 @@ import '../network/api_client.dart';
 import 'player_configuration_screen.dart';
 import '../services/midi_configuration.dart';
 import '../services/midi_playback.dart';
-import '../widgets/traditional_score.dart';
 import '../widgets/melodiscan_background.dart';
+import '../widgets/verovio_score.dart';
 
 class PlayerScreen extends StatefulWidget {
   final String taskId;
@@ -23,6 +23,7 @@ class PlayerScreen extends StatefulWidget {
   final String? profileId;
   final http.Client? httpClient;
   final MidiPlayback? midiPlayback;
+  final MusicXmlSvgRenderer? scoreRenderer;
 
   const PlayerScreen({
     super.key,
@@ -33,6 +34,7 @@ class PlayerScreen extends StatefulWidget {
     this.profileId,
     this.httpClient,
     this.midiPlayback,
+    this.scoreRenderer,
   });
 
   @override
@@ -895,9 +897,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       lowPitch: pitchRange.$1,
                       highPitch: pitchRange.$2,
                     )
-                  : TraditionalScore(
-                      score: score,
-                      currentTick: _playbackPosition,
+                  : VerovioScore(
+                      musicXml: _musicXmlSource!,
+                      renderer: widget.scoreRenderer,
                     ),
             ),
           ),
@@ -1011,7 +1013,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   ),
                 ),
               ] else
-                const Text('Lecture disponible sur Android 7+'),
+                const Text('Lecture disponible sur Android et iOS'),
             ],
           ),
         ),

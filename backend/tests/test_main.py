@@ -6,7 +6,6 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
-from zipfile import ZIP_DEFLATED, ZipFile
 from xml.etree import ElementTree
 
 import pytest
@@ -41,7 +40,7 @@ def clear_local_tasks(monkeypatch, tmp_path):
 
 def test_health_reports_unavailable_dependencies(monkeypatch):
     monkeypatch.setattr(main, "get_redis_client", lambda: None)
-    monkeypatch.setattr(main.shutil, "which", lambda _executable: None)
+    monkeypatch.setattr(main.importlib.util, "find_spec", lambda _name: None)
 
     async def builder_unavailable(_method, _path):
         return 503, {"status": "degraded"}
@@ -56,7 +55,7 @@ def test_health_reports_unavailable_dependencies(monkeypatch):
         "dependencies": {
             "redis": False,
             "celery_worker": False,
-            "audiveris": False,
+            "oemer": False,
             "apk_builder": False,
         },
     }
@@ -71,7 +70,7 @@ def test_health_reports_all_required_dependencies(monkeypatch):
         control = WorkerControl()
 
     monkeypatch.setattr(main, "get_redis_client", lambda: object())
-    monkeypatch.setattr(main.shutil, "which", lambda _executable: "/usr/bin/audiveris")
+    monkeypatch.setattr(main.importlib.util, "find_spec", lambda _name: object())
     monkeypatch.setattr("app.tasks.celery_app", CeleryApp())
 
     async def builder_ready(_method, _path):
@@ -255,13 +254,13 @@ def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
     input_path = tmp_path / "failed-log-task.png"
     logs_path = tmp_path / "failed-log-task.log"
     input_path.write_bytes(PNG_BYTES)
-    complete_logs = "INFO start\n" + ("Audiveris processing detail\n" * 1000)
+    complete_logs = "INFO start\n" + ("Oemer processing detail\n" * 1000)
     logs_path.write_text(complete_logs, encoding="utf-8")
     set_task_state("failed-log-task", {
         "task_id": "failed-log-task",
         "title": "Export test",
         "status": "STATUS_FAILED",
-        "error": "Detailed Audiveris export error",
+        "error": "Detailed Oemer export error",
         "file_path": str(input_path),
         "logs_path": str(logs_path),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -284,7 +283,7 @@ def test_dashboard_logs_page_and_task_log_endpoint(tmp_path):
 
 def test_task_logs_are_available_while_processing_and_without_preview(tmp_path):
     logs_path = tmp_path / "running-log-task.log"
-    logs_path.write_text("Audiveris is processing\n", encoding="utf-8")
+    logs_path.write_text("Oemer is processing\n", encoding="utf-8")
     set_task_state("running-log-task", {
         "task_id": "running-log-task",
         "status": "STATUS_RUNNING_OMR",
@@ -298,7 +297,7 @@ def test_task_logs_are_available_while_processing_and_without_preview(tmp_path):
     assert client.get("/api/v1/tasks/missing/logs").status_code == 404
     running_logs = client.get("/api/v1/tasks/running-log-task/logs")
     assert running_logs.status_code == 200
-    assert running_logs.json()["logs"] == "Audiveris is processing\n"
+    assert running_logs.json()["logs"] == "Oemer is processing\n"
     assert running_logs.json()["input_preview"] is None
     assert client.get("/api/v1/tasks/running-log-task/input").status_code == 409
     assert client.get(
@@ -349,120 +348,75 @@ def test_scan_reports_queue_failure(monkeypatch):
     assert response.status_code == 503
 
 
-def test_omr_engine_reports_missing_audiveris(tmp_path):
-    engine = OMREngine(executable="missing-audiveris")
+def test_omr_engine_reports_missing_oemer(tmp_path, monkeypatch):
+    def missing_executable(*_args, **_kwargs):
+        raise FileNotFoundError
 
-    with pytest.raises(OMRProcessingError, match="not installed"):
-        engine.process_image(str(tmp_path / "score.png"), str(tmp_path))
-
-
-def test_omr_engine_reports_audiveris_failure(tmp_path, monkeypatch):
-    class ProcessResult:
-        returncode = 1
-        stderr = b"invalid score"
-        stdout = b""
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", lambda *args, **kwargs: ProcessResult())
-
-    with pytest.raises(OMRProcessingError) as error:
-        OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
-    assert str(error.value) == "Audiveris failed with exit code 1."
-    assert "invalid score" in error.value.diagnostics
+    monkeypatch.setattr("app.omr_engine.subprocess.run", missing_executable)
+    with pytest.raises(OMRProcessingError, match="Oemer executable .* not installed"):
+        OMREngine(executable="missing-oemer").process_image(
+            str(tmp_path / "score.png"), str(tmp_path)
+        )
 
 
-def test_omr_engine_passes_pdf_document_to_audiveris(tmp_path, monkeypatch):
-    pdf_path = tmp_path / "score.pdf"
-    pdf_path.write_bytes(PDF_BYTES)
-    output_path = tmp_path / "score.musicxml"
+def test_omr_engine_runs_oemer_for_image_and_uses_its_musicxml(tmp_path, monkeypatch):
+    input_path = tmp_path / "score.jpeg"
+    input_path.write_bytes(PNG_BYTES)
+    musicxml = b"<score-partwise><part-list/></score-partwise>"
     calls = []
-
-    class ProcessResult:
-        returncode = 0
-        stderr = b""
-        stdout = b""
 
     def run(command, **_kwargs):
         calls.append(command)
-        output_path.write_text("<score-partwise/>")
-        return ProcessResult()
+        output_path = Path(command[command.index("--output-path") + 1])
+        output_path.write_bytes(musicxml)
+        return subprocess.CompletedProcess(command, 0, stdout="Oemer completed")
 
     monkeypatch.setattr("app.omr_engine.subprocess.run", run)
+    result = OMREngine().process_image(str(input_path), str(tmp_path))
 
+    assert Path(result).read_bytes() == musicxml
+    assert calls[0][0] == "oemer"
+    assert calls[0][1] == str(input_path)
+    assert "--output-path" in calls[0]
+    output_path = Path(calls[0][calls[0].index("--output-path") + 1])
+    assert output_path.name == "recognized.musicxml"
+
+
+def test_omr_engine_rasterizes_and_merges_multipage_pdf(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(PDF_BYTES)
+    outputs = [
+        b"<score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name>"
+        b"</score-part></part-list><part id='P1'><measure number='1'/></part></score-partwise>",
+        b"<score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name>"
+        b"</score-part></part-list><part id='P1'><measure number='2'/></part></score-partwise>",
+    ]
+    pages = []
+
+    def convert_from_path(_pdf_path, **kwargs):
+        page_paths = []
+        for index in range(2):
+            page_path = Path(kwargs["output_folder"]) / f"page-{index + 1}.png"
+            page_path.write_bytes(PNG_BYTES)
+            page_paths.append(str(page_path))
+        return page_paths
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pdf2image",
+        ModuleType("pdf2image"),
+    )
+    sys.modules["pdf2image"].convert_from_path = convert_from_path
+
+    def run(command, **_kwargs):
+        pages.append(command[1])
+        output_path = Path(command[command.index("--output-path") + 1])
+        output_path.write_bytes(outputs[len(pages) - 1])
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
     result = OMREngine().process_score(str(pdf_path), str(tmp_path))
 
-    assert result == str(output_path)
-    assert calls[0][-1] == str(pdf_path)
-    assert "-batch" in calls[0]
-    assert "-transcribe" in calls[0]
-    assert "-export" in calls[0]
-
-
-def test_omr_engine_converts_audiveris_mxl_export_to_musicxml(tmp_path, monkeypatch):
-    output_mxl = tmp_path / "score.mxl"
-    output_musicxml = tmp_path / "score.musicxml"
-    musicxml = b'<?xml version="1.0"?><score-partwise><part-list/></score-partwise>'
-    container = (
-        b'<?xml version="1.0"?><container><rootfiles>'
-        b'<rootfile full-path="scores/score.xml" '
-        b'media-type="application/vnd.recordare.musicxml+xml"/>'
-        b"</rootfiles></container>"
-    )
-
-    class ProcessResult:
-        returncode = 0
-        stderr = b""
-        stdout = b"Score exported to score.mxl"
-
-    def run(_command, **_kwargs):
-        with ZipFile(output_mxl, "w", ZIP_DEFLATED) as archive:
-            archive.writestr("META-INF/container.xml", container)
-            archive.writestr("scores/score.xml", musicxml)
-        return ProcessResult()
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
-
-    result = OMREngine().process_score(
-        str(tmp_path / "score.png"), str(tmp_path)
-    )
-
-    assert result == str(output_musicxml)
-    assert output_musicxml.read_bytes() == musicxml
-
-
-def test_omr_engine_merges_audiveris_movement_exports(tmp_path, monkeypatch):
-    container = (
-        b'<?xml version="1.0"?><container><rootfiles>'
-        b'<rootfile full-path="scores/score.xml" '
-        b'media-type="application/vnd.recordare.musicxml+xml"/>'
-        b"</rootfiles></container>"
-    )
-    movements = {
-        1: b"<score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name>"
-        b"</score-part></part-list><part id='P1'><measure number='1'/></part></score-partwise>",
-        2: b"<score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name>"
-        b"</score-part></part-list><part id='P1'><measure number='2'/></part></score-partwise>",
-    }
-
-    class ProcessResult:
-        returncode = 0
-        stderr = b""
-        stdout = b"Exported movement files"
-
-    def run(_command, **_kwargs):
-        for movement_number, musicxml in movements.items():
-            output_mxl = tmp_path / f"score.mvt{movement_number}.mxl"
-            with ZipFile(output_mxl, "w", ZIP_DEFLATED) as archive:
-                archive.writestr("META-INF/container.xml", container)
-                archive.writestr("scores/score.xml", musicxml)
-        return ProcessResult()
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
-
-    result = OMREngine().process_score(
-        str(tmp_path / "score.pdf"), str(tmp_path)
-    )
-
-    assert result == str(tmp_path / "score.musicxml")
     root = ElementTree.parse(result).getroot()
     measures = [
         measure.get("number")
@@ -471,102 +425,23 @@ def test_omr_engine_merges_audiveris_movement_exports(tmp_path, monkeypatch):
         for measure in part
         if measure.tag == "measure"
     ]
+    assert len(pages) == 2
     assert measures == ["1", "2"]
 
 
-def test_omr_engine_rejects_mxl_without_musicxml_container(tmp_path, monkeypatch):
-    output_mxl = tmp_path / "score.mxl"
-
-    class ProcessResult:
-        returncode = 0
-        stderr = b""
-        stdout = b"Score exported to score.mxl"
-
-    def run(_command, **_kwargs):
-        with ZipFile(output_mxl, "w", ZIP_DEFLATED) as archive:
-            archive.writestr("score.xml", "<score-partwise/>")
-        return ProcessResult()
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
-
-    with pytest.raises(OMRProcessingError, match="Could not read MusicXML from Audiveris MXL export"):
-        OMREngine().process_score(str(tmp_path / "score.png"), str(tmp_path))
-
-
-def test_omr_engine_includes_audiveris_output_when_musicxml_is_missing(
-    tmp_path, monkeypatch
-):
-    class ProcessResult:
-        returncode = 0
-        stderr = b"WARN No scores detected"
-        stdout = b"Created scores: []"
-
+def test_omr_engine_reports_oemer_failure_diagnostics(tmp_path, monkeypatch):
+    input_path = tmp_path / "score.png"
+    input_path.write_bytes(PNG_BYTES)
     monkeypatch.setattr(
         "app.omr_engine.subprocess.run",
-        lambda *args, **kwargs: ProcessResult(),
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="Could not read the input score"
+        ),
     )
 
-    with pytest.raises(OMRProcessingError) as error:
-        OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
-
-    message = str(error.value)
-    assert "score.musicxml" in message
-    assert "WARN No scores detected" in error.value.diagnostics
-    assert "Created scores: []" in error.value.diagnostics
-
-
-def test_omr_engine_includes_stdout_when_audiveris_stderr_is_empty(tmp_path, monkeypatch):
-    class ProcessResult:
-        returncode = 1
-        stderr = b""
-        stdout = b"Could not read the input score"
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", lambda *args, **kwargs: ProcessResult())
-
-    with pytest.raises(OMRProcessingError) as error:
-        OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
+    with pytest.raises(OMRProcessingError, match="Oemer failed on page 1") as error:
+        OMREngine().process_image(str(input_path), str(tmp_path))
     assert "Could not read the input score" in error.value.diagnostics
-
-
-def test_omr_engine_preserves_all_long_diagnostics(tmp_path, monkeypatch):
-    class ProcessResult:
-        returncode = 1
-        stderr = b"Initial export context\n" + b"x" * 5000
-        stdout = b"Final export failure"
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", lambda *args, **kwargs: ProcessResult())
-
-    with pytest.raises(OMRProcessingError) as error:
-        OMREngine().process_image(str(tmp_path / "score.png"), str(tmp_path))
-
-    diagnostics = error.value.diagnostics
-    assert "Initial export context" in diagnostics
-    assert "Final export failure" in diagnostics
-    assert len(diagnostics) > 5000
-
-
-def test_omr_engine_streams_complete_output_to_log_file(tmp_path, monkeypatch):
-    log_path = tmp_path / "score.log"
-    expected_output = b"First line\n" + b"detail\n" * 1000
-    output_path = tmp_path / "score.musicxml"
-
-    class ProcessResult:
-        returncode = 0
-
-    def run(_command, stdout, stderr, **_kwargs):
-        assert stderr == subprocess.STDOUT
-        stdout.write(expected_output)
-        output_path.write_text("<score-partwise/>")
-        return ProcessResult()
-
-    monkeypatch.setattr("app.omr_engine.subprocess.run", run)
-
-    result = OMREngine().process_score(
-        str(tmp_path / "score.png"), str(tmp_path), str(log_path)
-    )
-
-    assert result == str(output_path)
-    assert log_path.read_bytes() == expected_output
 
 
 def test_worker_persists_processing_error(tmp_path, monkeypatch):
@@ -582,23 +457,23 @@ def test_worker_persists_processing_error(tmp_path, monkeypatch):
     })
 
     def fail_processing(*_args):
-        raise OMRProcessingError("Audiveris unavailable")
+        raise OMRProcessingError("Oemer unavailable")
 
     monkeypatch.setattr("app.tasks.OMREngine.process_score", fail_processing)
 
-    with pytest.raises(OMRProcessingError, match="Audiveris unavailable"):
+    with pytest.raises(OMRProcessingError, match="Oemer unavailable"):
         process_omr_task.run("failed-worker-task", str(tmp_path / "score.png"), "Test")
 
     task = get_task_state("failed-worker-task")
     assert task["status"] == "STATUS_FAILED"
-    assert task["error"] == "Audiveris unavailable"
+    assert task["error"] == "Oemer unavailable"
     assert task["failed_at"]
     logs = logs_path.read_text(encoding="utf-8")
-    assert "Lancement de la reconnaissance Audiveris." in logs
-    assert "Échec du traitement : Audiveris unavailable" in logs
+    assert "Lancement de la reconnaissance Oemer." in logs
+    assert "Échec du traitement : Oemer unavailable" in logs
 
 
-def test_worker_explains_audiveris_low_interline_failure(tmp_path, monkeypatch):
+def test_worker_explains_oemer_low_interline_failure(tmp_path, monkeypatch):
     from app.tasks import process_omr_task
 
     logs_path = tmp_path / "low-interline-task.log"
@@ -631,7 +506,7 @@ def test_worker_explains_audiveris_low_interline_failure(tmp_path, monkeypatch):
     assert "photo peut être nette" in task["error_summary"]
     assert task["error"] == diagnostic
     assert input_path.read_bytes() == PNG_BYTES
-    assert "Lancement de la reconnaissance Audiveris." in logs_path.read_text(
+    assert "Lancement de la reconnaissance Oemer." in logs_path.read_text(
         encoding="utf-8"
     )
     stream = client.get("/api/v1/stream/low-interline-task").text
@@ -654,7 +529,7 @@ def test_worker_summarizes_missing_musicxml_error(tmp_path, monkeypatch):
     input_path = tmp_path / "score.png"
     input_path.write_bytes(PNG_BYTES)
     diagnostic = (
-        "Audiveris completed without producing a non-empty MusicXML file "
+        "Oemer completed without producing MusicXML "
         "at the expected path 'data/temp/score.musicxml'. Output: Created scores: []"
     )
     monkeypatch.setattr(
@@ -685,7 +560,7 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
         "status": "STATUS_QUEUED",
         "logs_path": str(logs_path),
     })
-    full_audiveris_output = "INFO processing\n" + ("complete detail\n" * 1000)
+    full_oemer_output = "INFO processing\n" + ("complete detail\n" * 1000)
 
     musicxml_path = tmp_path / "score.musicxml"
     musicxml_path.write_text(
@@ -703,7 +578,7 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
 
     def process_score(_engine, _score_path, _output_dir, received_log_path):
         with open(received_log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(full_audiveris_output)
+            log_file.write(full_oemer_output)
         return str(musicxml_path)
 
     monkeypatch.setattr("app.tasks.OMREngine.process_score", process_score)
@@ -757,9 +632,9 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
     logs_response = client.get("/api/v1/tasks/successful-log-task/logs")
     logs = logs_response.json()["logs"]
     assert logs_response.status_code == 200
-    assert full_audiveris_output in logs
+    assert full_oemer_output in logs
     assert "Traitement terminé avec succès." in logs
-    assert "Audiveris" not in (logs_response.json()["summary"] or "")
+    assert "Oemer" not in (logs_response.json()["summary"] or "")
 
 
 def test_worker_does_not_use_musicxml_title_when_gemini_finds_no_title(
@@ -848,63 +723,78 @@ def test_library_score_can_only_be_deleted_by_its_profile(tmp_path):
     ).status_code == 404
 
 
-def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path, monkeypatch):
-    partitura = ModuleType("partitura")
-
-    def fail_to_parse(_path):
-        raise ValueError("invalid MusicXML")
-
-    partitura.load_musicxml = fail_to_parse
-    monkeypatch.setitem(sys.modules, "partitura", partitura)
+def test_musicxml_conversion_error_does_not_create_fake_midi(tmp_path):
+    musicxml_path = tmp_path / "invalid.musicxml"
+    musicxml_path.write_text("not MusicXML", encoding="utf-8")
     midi_path = tmp_path / "score.mid"
 
-    with pytest.raises(OMRProcessingError, match="invalid MusicXML"):
-        convert_musicxml_to_midi(str(tmp_path / "score.musicxml"), str(midi_path))
+    with pytest.raises(OMRProcessingError, match="MusicXML to MIDI conversion failed"):
+        convert_musicxml_to_midi(str(musicxml_path), str(midi_path))
 
     assert not midi_path.exists()
 
 
-def test_musicxml_conversion_uses_partitura_score_midi_export(tmp_path, monkeypatch):
-    partitura = ModuleType("partitura")
-    score = object()
-    midi_path = tmp_path / "score.mid"
-    midi_content = (
-        b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x00\x60"
-        b"MTrk\x00\x00\x00\x04\x00\xff\x2f\x00"
+def test_musicxml_conversion_applies_velocity_program_and_effects(tmp_path):
+    import mido
+
+    musicxml_path = tmp_path / "score.musicxml"
+    musicxml_path.write_text(
+        """<score-partwise version="3.1">
+          <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+          <part id="P1">
+            <measure number="1">
+              <attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+              <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note>
+              <note><pitch><step>D</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note>
+            </measure>
+          </part>
+        </score-partwise>""",
+        encoding="utf-8",
     )
-    saved_scores = []
-
-    partitura.load_musicxml = lambda _path: score
-
-    def save_score_midi(received_score, output_path):
-        saved_scores.append(received_score)
-        with open(output_path, "wb") as midi_file:
-            midi_file.write(midi_content)
-
-    partitura.save_score_midi = save_score_midi
-    monkeypatch.setitem(sys.modules, "partitura", partitura)
+    midi_path = tmp_path / "score.mid"
 
     result = convert_musicxml_to_midi(
-        str(tmp_path / "score.musicxml"), str(midi_path)
+        str(musicxml_path), str(midi_path)
     )
 
     assert result == str(midi_path)
-    assert saved_scores == [score]
-    assert midi_path.read_bytes() == midi_content
+    midi_file = mido.MidiFile(midi_path)
+    messages = [message for track in midi_file.tracks for message in track]
+    assert any(
+        message.type == "program_change" and message.program == 0
+        for message in messages
+    )
+    assert any(
+        message.type == "control_change"
+        and message.control == 91
+        and message.value == 45
+        for message in messages
+    )
+    assert any(
+        message.type == "control_change"
+        and message.control == 93
+        and message.value == 20
+        for message in messages
+    )
+    assert [
+        message.velocity
+        for message in messages
+        if message.type == "note_on" and message.velocity > 0
+    ] == [88, 88]
 
 
 def test_result_requires_completed_task(tmp_path):
     set_task_state("queued-task", {"status": "STATUS_QUEUED"})
     set_task_state("failed-task", {
         "status": "STATUS_FAILED",
-        "error": "Audiveris unavailable",
+        "error": "Oemer unavailable",
     })
 
     assert client.get("/api/v1/result/unknown-task").status_code == 404
     assert client.get("/api/v1/result/queued-task").status_code == 409
     failed = client.get("/api/v1/result/failed-task")
     assert failed.status_code == 422
-    assert failed.json()["detail"] == "Audiveris unavailable"
+    assert failed.json()["detail"] == "Oemer unavailable"
 
 
 def test_status_stream_times_out_with_a_real_failure(monkeypatch):

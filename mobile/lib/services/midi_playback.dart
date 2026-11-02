@@ -3,8 +3,6 @@ import 'dart:typed_data';
 
 import 'package:flutter_midi_pro/flutter_midi_pro.dart';
 
-import 'general_midi_soundfont.dart';
-
 abstract interface class MidiPlayback {
   bool get isSupported;
 
@@ -37,16 +35,15 @@ class MidiPlaybackPosition {
 
 class FlutterMidiPlayback implements MidiPlayback {
   final MidiPro _midi = MidiPro();
-  final GeneralMidiSoundfont _soundfont = GeneralMidiSoundfont();
   int? _soundfontId;
 
   @override
-  bool get isSupported => Platform.isAndroid;
+  bool get isSupported => Platform.isAndroid || Platform.isIOS;
 
   @override
   Future<void> prepare(Uint8List midiBytes) async {
     if (!isSupported) {
-      throw UnsupportedError('La lecture MIDI est disponible sur Android.');
+      throw UnsupportedError('La lecture MIDI est disponible sur Android et iOS.');
     }
 
     if (!_midi.isInitialized) {
@@ -54,10 +51,9 @@ class FlutterMidiPlayback implements MidiPlayback {
     }
 
     try {
-      if (_soundfontId == null) {
-        final file = await _soundfont.getFile();
-        _soundfontId = await _midi.loadSoundfontFile(filePath: file.path);
-      }
+      _soundfontId ??= await _midi.loadSoundfontAsset(
+        assetPath: 'assets/soundfonts/instruments.sf2',
+      );
       await _midi.loadMidiData(data: midiBytes, sfId: _soundfontId!);
     } catch (_) {
       if (_soundfontId == null && _midi.isInitialized) {

@@ -129,7 +129,7 @@ const serviceLabels: Record<string, { label: string; icon: LucideIcon }> = {
   api: { label: "API MelodiScan", icon: Activity },
   redis: { label: "Base Redis", icon: Disc3 },
   celery_worker: { label: "Worker de traitement", icon: AudioLines },
-  audiveris: { label: "Moteur Audiveris", icon: Music2 },
+  oemer: { label: "Moteur Oemer", icon: Music2 },
   apk_builder: { label: "Générateur Android", icon: Download },
 };
 
@@ -527,7 +527,7 @@ function OverviewPage({ health }: { health: Health | null }) {
       </section>
 
       <section className="quick-stats">
-        <SmallStat icon={Fingerprint} label="Moteur de reconnaissance" value={stats?.primary_omr_engine ?? "Audiveris"} />
+        <SmallStat icon={Fingerprint} label="Moteur de reconnaissance" value={stats?.primary_omr_engine ?? "Oemer"} />
         <SmallStat icon={Clock3} label="Temps moyen de traitement" value={formatDuration(stats?.avg_processing_time_sec ?? null)} />
         <SmallStat icon={CheckCircle2} label="Taux de réussite" value={stats ? `${stats.success_rate}%` : "—"} />
       </section>

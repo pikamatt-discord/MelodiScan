@@ -205,7 +205,7 @@ def main() -> int:
             status == 200
             and health.get("status") == "ok"
             and all(dependencies.get(name) is True for name in (
-                "redis", "celery_worker", "audiveris", "apk_builder"
+                "redis", "celery_worker", "oemer", "apk_builder"
             )),
             f"HTTP {status}; dependencies: {dependencies}",
         ))

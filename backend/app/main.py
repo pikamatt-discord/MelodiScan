@@ -5,9 +5,9 @@ import base64
 import binascii
 import hashlib
 import hmac
+import importlib.util
 import logging
 import secrets
-import shutil
 import statistics
 import time
 from datetime import datetime, timedelta, timezone
@@ -38,7 +38,6 @@ app = FastAPI(
 
 logger = logging.getLogger(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-AUDIVERIS_EXECUTABLE = os.getenv("AUDIVERIS_EXECUTABLE", "audiveris")
 API_KEY = os.getenv("API_KEY", "")
 DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
@@ -313,7 +312,7 @@ async def request_apk_builder(method: str, path: str) -> tuple[int, dict]:
 @app.get("/health")
 async def health_check():
     redis_online = get_redis_client() is not None
-    audiveris_available = shutil.which(AUDIVERIS_EXECUTABLE) is not None
+    oemer_available = importlib.util.find_spec("oemer") is not None
     worker_online = False
     if redis_online:
         try:
@@ -333,7 +332,7 @@ async def health_check():
     dependencies = {
         "redis": redis_online,
         "celery_worker": worker_online,
-        "audiveris": audiveris_available,
+        "oemer": oemer_available,
         "apk_builder": apk_builder_online,
     }
     status = "ok" if all(dependencies.values()) else "degraded"
@@ -397,7 +396,7 @@ async def get_system_stats():
         "success_rate": round(success_rate, 1),
         "avg_processing_time_sec": round(statistics.mean(durations), 2) if durations else None,
         "redis_online": redis_online,
-        "primary_omr_engine": "Audiveris v5.10.0",
+        "primary_omr_engine": "Oemer",
         "activity_by_day": [
             {"date": day.isoformat(), "count": activity_by_day[day.isoformat()]}
             for day in activity_dates

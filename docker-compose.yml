@@ -10,7 +10,6 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
-      - AUDIVERIS_EXECUTABLE=${AUDIVERIS_EXECUTABLE:-audiveris}
       - APK_BUILDER_URL=http://melodiscan-apk-builder:8090
       - MELODISCAN_HOST=${MELODISCAN_HOST:-}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-20971520}
@@ -37,7 +36,6 @@ services:
     restart: always
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
-      - AUDIVERIS_EXECUTABLE=${AUDIVERIS_EXECUTABLE:-audiveris}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       - ./data/temp:/app/data/temp

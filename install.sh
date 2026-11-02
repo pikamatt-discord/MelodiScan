@@ -335,7 +335,7 @@ success "Certificat HTTPS récupéré"
 info "Redémarrage de Caddy et du générateur avec le certificat…"
 compose up -d --force-recreate melodiscan-https melodiscan-apk-builder
 success "Services HTTPS rechargés"
-info "Vérification de l’API, de Redis, du worker, d’Audiveris et du générateur APK…"
+info "Vérification de l’API, de Redis, du worker, d’Oemer et du générateur APK…"
 
 BASE_URL="https://${LAN_IP}"
 HEALTH_URL="${BASE_URL}/health"
@@ -352,7 +352,7 @@ for attempt in $(seq 1 60); do
       python3 -c '
 import json,sys
 data=json.load(sys.stdin)
-required=("redis","celery_worker","audiveris","apk_builder")
+required=("redis","celery_worker","oemer","apk_builder")
 sys.exit(0 if data.get("status") == "ok" and all(data.get("dependencies",{}).get(k) is True for k in required) else 1)
 ' 2>/dev/null; then
     ready=true

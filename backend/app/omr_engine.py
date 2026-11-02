@@ -1,39 +1,8 @@
 import copy
 import os
-import re
 import subprocess
-import zipfile
+import tempfile
 from xml.etree import ElementTree
-
-
-def _read_musicxml_from_mxl(output_mxl: str, diagnostics: str) -> bytes:
-    try:
-        with zipfile.ZipFile(output_mxl) as archive:
-            container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
-            rootfile = next(
-                (
-                    element
-                    for element in container.iter()
-                    if element.tag.rsplit("}", 1)[-1] == "rootfile"
-                ),
-                None,
-            )
-            musicxml_entry = rootfile.get("full-path") if rootfile is not None else None
-            if not musicxml_entry:
-                raise OMRProcessingError(
-                    "Audiveris exported an MXL file without a MusicXML rootfile."
-                )
-            musicxml_content = archive.read(musicxml_entry)
-        if not musicxml_content:
-            raise OMRProcessingError(
-                "Audiveris exported an empty MusicXML document inside the MXL file."
-            )
-        return musicxml_content
-    except (zipfile.BadZipFile, KeyError, ElementTree.ParseError, OSError) as exc:
-        raise OMRProcessingError(
-            f"Could not read MusicXML from Audiveris MXL export '{output_mxl}': {exc}",
-            diagnostics,
-        ) from exc
 
 
 def _local_name(tag: str) -> str:
@@ -56,12 +25,12 @@ def _part_names(root: ElementTree.Element) -> dict[str, str]:
     }
 
 
-def _merge_movement_musicxml(movements: list[bytes]) -> bytes:
+def _merge_page_musicxml(pages: list[bytes]) -> bytes:
     try:
-        roots = [ElementTree.fromstring(content) for content in movements]
+        roots = [ElementTree.fromstring(content) for content in pages]
     except ElementTree.ParseError as exc:
         raise OMRProcessingError(
-            f"Could not parse Audiveris movement MusicXML: {exc}"
+            f"Could not parse Oemer page MusicXML: {exc}"
         ) from exc
 
     merged_root = copy.deepcopy(roots[0])
@@ -74,7 +43,7 @@ def _merge_movement_musicxml(movements: list[bytes]) -> bytes:
         _local_name(root.tag) != _local_name(merged_root.tag) for root in roots
     ):
         raise OMRProcessingError(
-            "Audiveris movement exports do not contain compatible partwise MusicXML."
+            "Oemer page exports do not contain compatible partwise MusicXML."
         )
 
     target_names = _part_names(merged_root)
@@ -96,7 +65,7 @@ def _merge_movement_musicxml(movements: list[bytes]) -> bytes:
                     target_id = matches[0]
             if target_id is None or target_id in matched_parts:
                 raise OMRProcessingError(
-                    "Audiveris movement exports have incompatible or ambiguous parts."
+                    "Oemer page exports have incompatible or ambiguous parts."
                 )
             matched_parts.add(target_id)
             target_part = target_parts[target_id]
@@ -107,7 +76,7 @@ def _merge_movement_musicxml(movements: list[bytes]) -> bytes:
             )
         if matched_parts != set(target_parts):
             raise OMRProcessingError(
-                "Audiveris movement exports do not contain the same set of parts."
+                "Oemer page exports do not contain the same set of parts."
             )
 
     return ElementTree.tostring(
@@ -122,7 +91,7 @@ class OMRProcessingError(RuntimeError):
 
 
 class OMREngine:
-    def __init__(self, executable: str = "audiveris"):
+    def __init__(self, executable: str = "oemer"):
         self.executable = executable
 
     def process_score(
@@ -131,92 +100,107 @@ class OMREngine:
         os.makedirs(output_dir, exist_ok=True)
         base_name = os.path.splitext(os.path.basename(score_path))[0]
         output_musicxml = os.path.join(output_dir, f"{base_name}.musicxml")
+        is_pdf = os.path.splitext(score_path)[1].lower() == ".pdf"
+        diagnostics: list[str] = []
 
-        try:
-            cmd = [
-                self.executable,
-                "-batch",
-                "-transcribe",
-                "-export",
-                "-output",
-                output_dir,
-                score_path,
-            ]
-            if log_path:
-                with open(log_path, "ab") as log_file:
-                    res = subprocess.run(
-                        cmd,
-                        stdout=log_file,
-                        stderr=subprocess.STDOUT,
-                        timeout=300,
+        with tempfile.TemporaryDirectory(
+            prefix=f"{base_name}-oemer-", dir=output_dir
+        ) as working_dir:
+            if is_pdf:
+                try:
+                    from pdf2image import convert_from_path
+
+                    page_paths = convert_from_path(
+                        score_path,
+                        dpi=300,
+                        fmt="png",
+                        output_folder=working_dir,
+                        output_file="page",
+                        paths_only=True,
                     )
-                with open(log_path, "r", encoding="utf-8", errors="replace") as log_file:
-                    output = log_file.read()
+                except Exception as exc:
+                    raise OMRProcessingError(
+                        f"Could not rasterize PDF pages for Oemer: {exc}"
+                    ) from exc
             else:
-                res = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=300,
+                page_paths = [score_path]
+
+            if not page_paths:
+                raise OMRProcessingError("The uploaded score contains no pages.")
+
+            page_musicxml: list[bytes] = []
+            for page_number, page_path in enumerate(page_paths, start=1):
+                page_output_dir = os.path.join(working_dir, f"page-{page_number}")
+                os.makedirs(page_output_dir)
+                page_xml_path = os.path.join(page_output_dir, "recognized.musicxml")
+                command = [
+                    self.executable,
+                    page_path,
+                    "--output-path",
+                    page_xml_path,
+                ]
+                try:
+                    result = subprocess.run(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        timeout=600,
+                        check=False,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                except FileNotFoundError as exc:
+                    raise OMRProcessingError(
+                        f"Oemer executable '{self.executable}' is not installed or not on PATH."
+                    ) from exc
+                except subprocess.TimeoutExpired as exc:
+                    captured = exc.stdout or ""
+                    if isinstance(captured, bytes):
+                        captured = captured.decode("utf-8", errors="replace")
+                    raise OMRProcessingError(
+                        f"Oemer timed out while processing page {page_number}.",
+                        captured,
+                    ) from exc
+                except OSError as exc:
+                    raise OMRProcessingError(f"Could not run Oemer: {exc}") from exc
+
+                page_diagnostics = result.stdout or ""
+                diagnostics.append(
+                    f"Page {page_number}:\n{page_diagnostics}".rstrip()
                 )
-                output = "\n".join(
-                    f"{name}:\n{captured.decode('utf-8', errors='replace').strip()}"
-                    for name, captured in (("STDERR", res.stderr), ("STDOUT", res.stdout))
-                    if captured
-                ).strip()
-        except FileNotFoundError as exc:
-            raise OMRProcessingError(
-                f"Audiveris executable '{self.executable}' is not installed or not on PATH."
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            diagnostics = ""
-            if log_path and os.path.isfile(log_path):
-                with open(log_path, "r", encoding="utf-8", errors="replace") as log_file:
-                    diagnostics = log_file.read()
-            elif exc.output:
-                diagnostics = exc.output.decode("utf-8", errors="replace")
-            raise OMRProcessingError(
-                "Audiveris timed out after 300 seconds.", diagnostics
-            ) from exc
-        except OSError as exc:
-            raise OMRProcessingError(f"Could not run Audiveris: {exc}") from exc
+                if log_path and page_diagnostics:
+                    with open(log_path, "a", encoding="utf-8") as log_file:
+                        log_file.write(
+                            f"\nOemer page {page_number}:\n{page_diagnostics}\n"
+                        )
+                if result.returncode != 0:
+                    raise OMRProcessingError(
+                        f"Oemer failed on page {page_number} with exit code "
+                        f"{result.returncode}.",
+                        "\n".join(diagnostics),
+                    )
 
-        if res.returncode != 0:
-            raise OMRProcessingError(
-                f"Audiveris failed with exit code {res.returncode}.", output
-            )
-        movement_exports = []
-        movement_pattern = re.compile(
-            rf"^{re.escape(base_name)}\.mvt(\d+)\.mxl$"
-        )
-        for filename in os.listdir(output_dir):
-            match = movement_pattern.match(filename)
-            if match:
-                movement_exports.append(
-                    (int(match.group(1)), os.path.join(output_dir, filename))
+                if not os.path.isfile(page_xml_path) or os.path.getsize(page_xml_path) == 0:
+                    raise OMRProcessingError(
+                        f"Oemer completed without producing MusicXML for page {page_number} "
+                        f"at '{page_xml_path}'.",
+                        "\n".join(diagnostics),
+                    )
+                with open(page_xml_path, "rb") as musicxml_file:
+                    page_musicxml.append(musicxml_file.read())
+
+            try:
+                musicxml = (
+                    page_musicxml[0]
+                    if len(page_musicxml) == 1
+                    else _merge_page_musicxml(page_musicxml)
                 )
-        if movement_exports:
-            movement_contents = [
-                _read_musicxml_from_mxl(path, output)
-                for _, path in sorted(movement_exports)
-            ]
-            with open(output_musicxml, "wb") as musicxml_file:
-                musicxml_file.write(_merge_movement_musicxml(movement_contents))
-            return output_musicxml
+            except OMRProcessingError as exc:
+                raise OMRProcessingError(str(exc), "\n".join(diagnostics)) from exc
 
-        output_mxl = os.path.join(output_dir, f"{base_name}.mxl")
-        if os.path.isfile(output_mxl) and os.path.getsize(output_mxl) > 0:
-            musicxml_content = _read_musicxml_from_mxl(output_mxl, output)
-            with open(output_musicxml, "wb") as musicxml_file:
-                musicxml_file.write(musicxml_content)
-            return output_musicxml
-        if not os.path.isfile(output_musicxml) or os.path.getsize(output_musicxml) == 0:
-            raise OMRProcessingError(
-                "Audiveris completed without producing a non-empty MusicXML file "
-                f"at the expected path '{output_musicxml}'.",
-                output,
-            )
-
+        with open(output_musicxml, "wb") as musicxml_file:
+            musicxml_file.write(musicxml)
         return output_musicxml
 
     def process_image(self, image_path: str, output_dir: str) -> str:
@@ -224,9 +208,56 @@ class OMREngine:
 
 def convert_musicxml_to_midi(musicxml_path: str, midi_output_path: str) -> str:
     try:
-        import partitura
-        score = partitura.load_musicxml(musicxml_path)
-        partitura.save_score_midi(score, midi_output_path)
+        from music21 import converter
+        import mido
+
+        score = converter.parse(musicxml_path)
+        for note in score.recurse().notes:
+            note.volume.velocity = 88
+        for instrument_part in score.recurse().getElementsByClass("Instrument"):
+            instrument_part.midiProgram = 0
+
+        score.write("midi", fp=midi_output_path)
+        midi_file = mido.MidiFile(midi_output_path)
+        for track in midi_file.tracks:
+            channels = {
+                message.channel
+                for message in track
+                if not message.is_meta and hasattr(message, "channel")
+            }
+            if not channels:
+                continue
+            for message in track:
+                if message.type == "program_change":
+                    message.program = 0
+                elif message.type == "note_on" and message.velocity > 0:
+                    message.velocity = 88
+            effects = []
+            for channel in sorted(channels):
+                effects.extend(
+                    [
+                        mido.Message(
+                            "program_change", channel=channel, program=0, time=0
+                        ),
+                        mido.Message(
+                            "control_change",
+                            channel=channel,
+                            control=91,
+                            value=45,
+                            time=0,
+                        ),
+                        mido.Message(
+                            "control_change",
+                            channel=channel,
+                            control=93,
+                            value=20,
+                            time=0,
+                        ),
+                    ]
+                )
+            track[:0] = effects
+        midi_file.save(midi_output_path)
+
         if not os.path.isfile(midi_output_path) or os.path.getsize(midi_output_path) < 22:
             raise OMRProcessingError("MusicXML conversion completed without producing a valid MIDI file.")
         with open(midi_output_path, "rb") as midi_file:

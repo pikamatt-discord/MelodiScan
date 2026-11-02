@@ -52,10 +52,11 @@ Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
 | Composant | Statut | Fonctionnalités Déployées |
 | :--- | :--- | :--- |
 | **API Backend (FastAPI)** | Prototype | Envoi d’une image ou d’un PDF par tâche, suivi SSE, téléchargement MIDI et MusicXML reconnus après succès, statistiques et état de santé des dépendances. |
-| **Moteur OMR** | Intégré à l’image | Audiveris 5.10.0 est installé dans l’image Docker du backend/worker. Toute erreur OMR ou de conversion marque la tâche en échec ; aucun moteur de secours ni partition synthétique. |
+| **Moteur OMR** | Intégré à l’image | Oemer reconnaît chaque page image et les PDF sont rasterisés page par page avec `pdf2image`/Poppler. Les MusicXML des pages sont fusionnés dans l’ordre ; toute erreur reste explicite. |
 | **Dashboard serveur** | Opérationnel | Interface React + TypeScript responsive, navigation studio, icônes Lucide, statistiques, état des services, historique filtrable, diagnostics et génération réelle d’un APK Release. |
-| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, suivi SSE, partition traditionnelle rendue depuis le MusicXML détecté par Audiveris avec défilement synchronisé, vue piano roll en option et lecture MIDI sur Android 7+ avec FluidSynth. La banque GeneralUser GS (GM) est téléchargée et vérifiée au premier lancement de la lecture, puis conservée hors ligne. Le prétraitement d’image n’est pas implémenté. |
-| **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Audiveris. |
+| **Conversion audio** | Intégrée au worker | `music21` conserve le MusicXML visuel et produit un MIDI avec vélocité 88, programme Grand Piano 0, reverb CC91=45 et chorus CC93=20. |
+| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, suivi SSE, partition engravée sur l’appareil avec Verovio et SVG, vue piano roll en option et lecture MIDI locale avec FluidSynth sur Android/iOS. La banque GeneralUser GS est embarquée dans l’APK ; aucune banque n’est téléchargée après installation. |
+| **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Oemer et Poppler. |
 | **Tests automatisés** | En cours | Tests ciblés backend et Flutter ; exécuter les commandes de test ci-dessous dans des environnements munis de leurs dépendances. |
 
 ---
@@ -69,7 +70,7 @@ Pour transformer l'environnement actuel de développement/démonstration en une 
 2. **Certificat public pour un accès Internet :** Le déploiement fourni utilise Caddy et une CA locale ; un déploiement public devra utiliser un domaine et un certificat reconnu publiquement, par exemple via Let's Encrypt.
 
 #### B. Moteur OMR & Traitement Avancé (OMR Production Integration)
-1. **Amélioration du traitement Audiveris :** Ajouter une validation de qualité et une correction manuelle des partitions reconnues. MelodiScan ne bascule pas sur un autre moteur si Audiveris échoue.
+1. **Amélioration du traitement Oemer :** Ajouter une validation de qualité et une correction manuelle des partitions reconnues.
 2. **Correction Manuelle sur l'Application Mobile :** Ajouter un éditeur interactif permettant à l'utilisateur d'ajuster ou corriger manuellement les notes/mesures mal reconnues sur la partition avant l'exportation finale.
 
 #### C. Performance & Scalabilité (Infrastructure Scaling)
@@ -77,7 +78,7 @@ Pour transformer l'environnement actuel de développement/démonstration en une 
 2. **Gestionnaire de Cache Redis Persistant :** Monter un volume persistant Redis (`appendonly yes`) pour conserver l'historique complet des partitions numérisées au redémarrage du serveur.
 
 #### D. Lecture Audio Mobile
-1. **Lecture MIDI sur iOS :** Le lecteur de fichiers MIDI intégré fonctionne actuellement sur Android 7+ ; ajouter la lecture de fichiers MIDI sur iOS.
+1. **Distribution iOS :** Configurer la signature et la distribution iOS pour accompagner la lecture MIDI et le rendu Verovio désormais intégrés au client.
 
 ---
 
@@ -102,10 +103,10 @@ En mode interactif, le menu permet aussi de consulter l’état des services, de
 
 Le script automatise les étapes suivantes :
 1. Installe Docker/Compose si nécessaire et active le service Docker au démarrage d’Ubuntu. Les conteneurs Compose utilisent `restart: always` pour que l’API, le worker, Redis, le générateur APK et Caddy redémarrent avec Docker après un redémarrage du serveur.
-2. Construit l’image backend avec Audiveris 5.10.0 et l’image Flutter/Android de génération d’APK, puis démarre tous les services.
+2. Construit l’image backend avec Oemer et Poppler ainsi que l’image Flutter/Android de génération d’APK, puis démarre tous les services.
 3. Détecte l’adresse IPv4 du serveur sur le réseau local et configure HTTPS pour cette adresse, sans réglage DNS.
 4. Génère et conserve la clé API MelodiScan et les identifiants du dashboard dans `.env` (permissions privées). Il propose aussi une saisie masquée de la clé API Gemini, facultative : Entrée conserve une clé existante ou laisse Gemini désactivé lors d’une première installation ; `-` désactive une clé déjà enregistrée. La clé Gemini reste uniquement dans `.env` et est transmise au worker, jamais à l’application mobile.
-5. Récupère la CA publique Caddy et redémarre le proxy et le générateur pour qu’ils utilisent la configuration et le certificat locaux. Interroge ensuite **l’URL HTTPS exacte du serveur** sur `/health`, valide le certificat avec cette CA et exige HTTP 200 ainsi que Redis, le worker, Audiveris et le générateur opérationnels.
+5. Récupère la CA publique Caddy et redémarre le proxy et le générateur pour qu’ils utilisent la configuration et le certificat locaux. Interroge ensuite **l’URL HTTPS exacte du serveur** sur `/health`, valide le certificat avec cette CA et exige HTTP 200 ainsi que Redis, le worker, Oemer et le générateur opérationnels.
 6. Compare l’empreinte des sources mobiles, de l’adresse, de la clé API et de la CA avec celle de l’APK signé existant. Il ne recompile que si l’APK est absent, invalide ou si un de ces éléments a changé ; il vérifie tout nouvel APK et le publie dans `data/apk/app-release.apk`. La clé de signature Android est conservée dans `data/android-config` pour que les versions successives puissent mettre à jour l’application installée.
 
 À la fin, le script affiche l’URL du dashboard et l’URL API copiables, les identifiants et le chemin de l’APK. Il confirme explicitement que `GET https://<IP-du-serveur>/health` a répondu HTTP 200 avec les dépendances requises en ligne. L’URL API intégrée à l’APK est cette adresse réseau vérifiée, jamais `localhost`. Le téléphone doit être sur le même réseau ; installez l’APK fourni, sans configurer de DNS ni installer de certificat sur le téléphone. La clé API est intégrée à cet APK : elle convient à un usage personnel/familial sur réseau local, mais ne constitue pas une authentification individuelle forte.
@@ -124,15 +125,15 @@ Après l’installation, depuis le dossier `MelodiScan`, lancez une seule comman
 bash test-complet.sh
 ```
 
-Le rapport vérifie la configuration et le build Docker/Audiveris, lance les tests pytest du backend dans un conteneur isolé, puis exécute l’analyse et les tests Flutter dans le générateur Android conteneurisé. Si les services sont démarrés, il vérifie HTTPS avec la CA et le résultat complet de `/health`, l’authentification et les endpoints ; il déclenche ensuite une vraie compilation APK via le même endpoint que le dashboard, vérifie le ZIP, le manifeste et la signature Android, puis contrôle le téléchargement. Il envoie aussi volontairement une image PNG invalide pour vérifier la propagation de l’échec OMR sans faux MIDI. Ce test peut prendre plusieurs minutes selon le cache Gradle. La tâche de scan d’essai est retirée de l’historique Redis. Le script ne démarre ni n’arrête les services. Copiez toute la sortie affichée ; elle n’inclut pas les secrets du fichier `.env`.
+Le rapport vérifie la configuration et le build Docker/Oemer, lance les tests pytest du backend dans un conteneur isolé, puis exécute l’analyse et les tests Flutter dans le générateur Android conteneurisé. Si les services sont démarrés, il vérifie HTTPS avec la CA et le résultat complet de `/health`, l’authentification et les endpoints ; il déclenche ensuite une vraie compilation APK via le même endpoint que le dashboard, vérifie le ZIP, le manifeste et la signature Android, puis contrôle le téléchargement. Il envoie aussi volontairement une image PNG invalide pour vérifier la propagation de l’échec OMR sans faux MIDI. Ce test peut prendre plusieurs minutes selon le cache Gradle. La tâche de scan d’essai est retirée de l’historique Redis. Le script ne démarre ni n’arrête les services. Copiez toute la sortie affichée ; elle n’inclut pas les secrets du fichier `.env`.
 
 Le script n’évalue pas la qualité de reconnaissance d’une partition valide : le dépôt ne fournit pas de partition de test de référence. Ce contrôle nécessite un vrai scan de partition et une sortie MIDI attendue à comparer.
 
-L’API sur le port 8080 reste accessible uniquement depuis la machine hôte pour le développement ; les appareils du réseau passent par HTTPS sur le port 443. Sans Redis, worker, Audiveris ou générateur APK, `/health` retourne `503` avec le détail des dépendances. Audiveris 5.10.0 est installé pendant la construction de l’image backend ; aucune autre solution n’est utilisée en cas d’échec.
+L’API sur le port 8080 reste accessible uniquement depuis la machine hôte pour le développement ; les appareils du réseau passent par HTTPS sur le port 443. Sans Redis, worker, Oemer ou générateur APK, `/health` retourne `503` avec le détail des dépendances. Oemer et Poppler sont installés pendant la construction de l’image backend ; les modèles Oemer sont téléchargés lors de la première reconnaissance.
 
 Hors installateur, les endpoints `/api/*` et `/download/*` acceptent une clé `API_KEY`; le dashboard peut être protégé avec `DASHBOARD_USERNAME` et `DASHBOARD_PASSWORD`. Dans ce cas, `/login` fournit une page de connexion dédiée et ouvre une session privée de huit heures ; les clients API conservent l’usage de `API_KEY` ou des identifiants HTTP Basic. Pour partager les sessions entre plusieurs processus, définissez aussi `DASHBOARD_SESSION_SECRET` dans `.env` ; sinon la clé API est réutilisée, ou une clé aléatoire valable jusqu’au redémarrage est créée. Sans configuration, l’authentification est désactivée pour le développement local ; n’exposez pas ce mode sur Internet. Le client Flutter de développement utilise `http://10.0.2.2:8080` par défaut. Pour une compilation personnalisée, définissez `MELODISCAN_API_URL`, `MELODISCAN_API_KEY` et `MELODISCAN_ROOT_CA_BASE64` avec `--dart-define`.
 
-L’endpoint `POST /api/v1/scan` accepte une image PNG, JPEG ou WebP, ou un document PDF, jusqu’à 20 Mio par défaut. Un PDF est traité comme un seul document par Audiveris, qui peut reconnaître les partitions sur plusieurs pages ; les images sont toujours envoyées une par tâche. Les échecs de reconnaissance restent explicites.
+L’endpoint `POST /api/v1/scan` accepte une image PNG, JPEG ou WebP, ou un document PDF, jusqu’à 20 Mio par défaut. Chaque page PDF est rasterisée à 300 DPI avant la reconnaissance Oemer ; les MusicXML produits sont fusionnés mesure par mesure dans l’ordre des pages. La conversion audio est faite avec `music21`, puis les pistes MIDI reçoivent le programme 0, une vélocité de 88 et les contrôleurs d’effets spécifiés. Les échecs de reconnaissance restent explicites.
 
 Le worker utilise Gemini 3.5 Flash-Lite comme seule détection automatique du titre imprimé sur le fichier original (image ou PDF), même si le MusicXML contient un titre. Cette analyse est limitée au titre : la clé Gemini est lue uniquement par le worker depuis `GEMINI_API_KEY` et ne doit jamais être intégrée à l’application mobile ni publiée. L’installateur la demande de façon masquée ; il est aussi possible de définir `GEMINI_API_KEY` dans `.env` avant l’installation ou la mise à jour. Après une modification manuelle, relancez `./install.sh` pour recréer le worker avec la nouvelle configuration. En exécution non interactive, fournissez la variable d’environnement ou renseignez `.env`. Sans clé ou si Gemini ne trouve pas de titre, l’application affiche le titre saisi manuellement ou le titre générique ; aucun autre titre détecté localement ou dans le MusicXML n’est utilisé. Les fichiers de plus de 14 Mio ne sont pas envoyés en ligne à Gemini. Pour rester sans frais et sans carte bancaire, ne liez aucun compte de facturation au projet Google AI Studio ; Google applique alors ses quotas gratuits et peut refuser les requêtes une fois le quota atteint. Les fichiers envoyés à l’offre gratuite sont soumis aux conditions de traitement des données de Google.
 
@@ -215,8 +216,8 @@ flutter run
 │  [ Docker Container - MelodiScan Engine ]               │
 │   ├── API Gateway (FastAPI + AsyncIO + Pydantic v2)    │
 │   ├── Task Queue (Celery / Redis)                       │
-│   ├── OMR : Audiveris CLI (seul moteur, inclus dans l’image)│
-│   ├── Conversion : Partitura vers MIDI                  │
+│   ├── OMR : Oemer CLI (moteur neuronal, inclus dans l’image)│
+│   ├── Conversion : music21 + humanisation MIDI           │
 │   └── Dashboard Web & APK (si artefact présent)          │
 └─────────────────────────────────────────────────────────┘
                            ▲

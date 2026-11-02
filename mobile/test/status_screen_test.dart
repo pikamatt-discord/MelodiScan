@@ -95,7 +95,7 @@ void main() {
   testWidgets(
       'StatusScreen displays concise processing errors without simulating completion',
       (tester) async {
-    const errorSummary = 'Aucune portée détectée : Audiveris mesure seulement '
+    const errorSummary = 'Aucune portée détectée : Oemer mesure seulement '
         '6 pixels entre les lignes. La photo peut être nette, mais sa définition '
         'reste trop faible pour cette analyse.';
     final client = MockClient((_) async => http.Response.bytes(

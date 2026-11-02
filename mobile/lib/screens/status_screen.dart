@@ -178,7 +178,7 @@ class _StatusScreenState extends State<StatusScreen> {
       case 'STATUS_PROCESSING_IMAGE':
         return 'Validation de l’image';
       case 'STATUS_RUNNING_OMR':
-        return 'Reconnaissance OMR avec Audiveris';
+        return 'Reconnaissance OMR avec Oemer';
       case 'STATUS_BUILDING_MUSICXML':
         return 'Préparation du résultat MusicXML';
       case 'STATUS_EXPORTING_MIDI':
@@ -197,7 +197,7 @@ class _StatusScreenState extends State<StatusScreen> {
       case 'STATUS_PROCESSING_IMAGE':
         return 'Vérification et préparation de l’image envoyée.';
       case 'STATUS_RUNNING_OMR':
-        return 'Audiveris repère les portées et reconnaît les notes.';
+        return 'Oemer repère les portées et reconnaît les notes.';
       case 'STATUS_BUILDING_MUSICXML':
         return 'La partition reconnue est mise en forme.';
       case 'STATUS_EXPORTING_MIDI':

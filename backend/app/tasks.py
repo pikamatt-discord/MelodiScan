@@ -28,17 +28,13 @@ def _error_summary(error: Exception, default: str) -> str:
     )
     if interline and "Created scores: []" in diagnostic:
         return (
-            "Aucune portée détectée : Audiveris mesure seulement "
+            "Aucune portée détectée : Oemer mesure seulement "
             f"{interline.group(1)} pixels entre les lignes. La photo peut être nette, "
             "mais sa définition reste trop faible pour cette analyse. Essayez le "
             "PDF original ou un scan en 300 DPI."
         )
-    if "completed without producing a non-empty MusicXML file" in diagnostic:
-        return (
-            "Audiveris n’a pas généré le fichier MusicXML attendu. Cela peut signifier "
-            "qu’aucune partition exploitable n’a été reconnue ou que le fichier a été "
-            "écrit sous un autre nom. Consultez les diagnostics détaillés."
-        )
+    if "completed without producing MusicXML" in diagnostic:
+        return "Oemer n’a pas généré le fichier MusicXML attendu."
     return default
 
 
@@ -68,12 +64,10 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
         state["status"] = "STATUS_PROCESSING_IMAGE"
         set_task_state(task_id, state)
 
-        _append_task_log(log_path, "Lancement de la reconnaissance Audiveris.")
+        _append_task_log(log_path, "Lancement de la reconnaissance Oemer.")
         state["status"] = "STATUS_RUNNING_OMR"
         set_task_state(task_id, state)
-        musicxml_path = OMREngine(
-            executable=os.getenv("AUDIVERIS_EXECUTABLE", "audiveris")
-        ).process_score(score_path, output_dir, log_path)
+        musicxml_path = OMREngine().process_score(score_path, output_dir, log_path)
 
         _append_task_log(log_path, f"MusicXML généré : {musicxml_path}")
         requested_title = (state.get("user_title") or title or "").strip()

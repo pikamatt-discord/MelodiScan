@@ -81,6 +81,12 @@ class FakeMidiPlayback implements MidiPlayback {
   }
 }
 
+Future<List<String>> _renderTestScore(String _) async => [
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+          '<path d="M 0 0 L 10 10"/>'
+          '</svg>',
+    ];
+
 final validMidiBytes = Uint8List.fromList([
   0x4D,
   0x54,
@@ -392,6 +398,7 @@ void main() {
             serverUrl: 'http://localhost:8080',
             httpClient: client,
             midiPlayback: playback,
+            scoreRenderer: _renderTestScore,
           ),
         ),
       ),
@@ -465,6 +472,7 @@ void main() {
           serverUrl: 'http://localhost:8080',
           httpClient: client,
           midiPlayback: playback,
+          scoreRenderer: _renderTestScore,
         ),
       ),
     );
@@ -518,6 +526,7 @@ void main() {
           serverUrl: 'http://localhost:8080',
           httpClient: client,
           midiPlayback: FakeMidiPlayback(),
+          scoreRenderer: _renderTestScore,
         ),
       ),
     );
@@ -558,6 +567,7 @@ void main() {
           serverUrl: 'http://localhost:8080',
           httpClient: client,
           midiPlayback: playback,
+          scoreRenderer: _renderTestScore,
         ),
       ),
     );
@@ -619,6 +629,7 @@ void main() {
           serverUrl: 'http://localhost:8080',
           httpClient: client,
           midiPlayback: FakeMidiPlayback(),
+          scoreRenderer: _renderTestScore,
         ),
       ),
     );
@@ -640,7 +651,7 @@ void main() {
       'PlayerScreen shows HTTP errors instead of fabricating a MIDI result',
       (tester) async {
     final client = MockClient((_) async => http.Response(
-          '{"detail":"Audiveris failed"}',
+          '{"detail":"Oemer failed"}',
           422,
           headers: {'content-type': 'application/json'},
         ));
@@ -655,6 +666,7 @@ void main() {
             serverUrl: 'http://localhost:8080',
             httpClient: client,
             midiPlayback: playback,
+            scoreRenderer: _renderTestScore,
           ),
         ),
       ),
@@ -662,7 +674,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Impossible de charger le résultat MIDI'), findsOneWidget);
-    expect(find.text('Audiveris failed'), findsOneWidget);
+    expect(find.text('Oemer failed'), findsOneWidget);
     expect(find.text('Lire'), findsNothing);
   });
 
@@ -679,13 +691,14 @@ void main() {
           serverUrl: 'http://localhost:8080',
           httpClient: client,
           midiPlayback: playback,
+          scoreRenderer: _renderTestScore,
         ),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(
-      find.textContaining('disponible sur Android 7'),
+      find.textContaining('disponible sur Android et iOS'),
       findsOneWidget,
     );
     expect(find.byKey(const Key('play_pause_fab')), findsNothing);
@@ -703,6 +716,7 @@ void main() {
           serverUrl: 'http://localhost:8080',
           httpClient: client,
           midiPlayback: playback,
+          scoreRenderer: _renderTestScore,
         ),
       ),
     );
