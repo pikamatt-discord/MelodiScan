@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -24,10 +24,12 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
+  Moon,
   Music2,
   Search,
   ShieldCheck,
   Sparkles,
+  Sun,
   UserRound,
   UsersRound,
   X,
@@ -193,6 +195,22 @@ function App() {
   const isLogin = pathname === "/login";
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    try {
+      return localStorage.getItem("melodiscan-dashboard-theme") === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("melodiscan-dashboard-theme", theme);
+    } catch {
+      // The selected theme still applies for this page when storage is unavailable.
+    }
+  }, [theme]);
 
   useEffect(() => {
     if (isLogin) return;
@@ -283,6 +301,15 @@ function App() {
             <span className={`system-indicator ${health?.status === "ok" ? "online" : health ? "degraded" : ""}`}>
               <span />{health?.status === "ok" ? "Système opérationnel" : health ? "Système dégradé" : "Vérification…"}
             </span>
+            <button
+              className="icon-button theme-toggle"
+              type="button"
+              aria-label={theme === "dark" ? "Activer le thème clair" : "Activer le thème sombre"}
+              title={theme === "dark" ? "Activer le thème clair" : "Activer le thème sombre"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
             <span className="topbar-divider" />
             <span className="topbar-avatar">M</span>
           </div>
