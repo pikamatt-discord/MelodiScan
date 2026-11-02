@@ -378,6 +378,7 @@ def test_omr_engine_runs_oemer_for_image_and_uses_its_musicxml(tmp_path, monkeyp
     assert calls[0][0] == "oemer"
     assert calls[0][1] == str(input_path)
     assert "--output-path" in calls[0]
+    assert "--use-tf" in calls[0]
     output_path = Path(calls[0][calls[0].index("--output-path") + 1])
     assert output_path.name == "recognized.musicxml"
 

@@ -138,6 +138,7 @@ class OMREngine:
                     page_path,
                     "--output-path",
                     page_xml_path,
+                    "--use-tf",
                 ]
                 try:
                     result = subprocess.run(
