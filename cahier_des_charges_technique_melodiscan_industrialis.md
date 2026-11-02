@@ -88,7 +88,7 @@ Le serveur doit pouvoir tourner sous forme de conteneurs **Docker Orchestrés (D
 Le serveur s’appuie sur un seul moteur OMR : une défaillance remonte à l’utilisateur, sans résultat de substitution.
 1. **Moteur OMR (Oemer) :**
    * Les PDF multipages sont rasterisés page par page avec `pdf2image` et Poppler.
-   * Oemer reconnaît chaque image en mode TensorFlow CPU, car le checkpoint ONNX `unet_big` échoue à l’initialisation avec ONNX Runtime 1.31. Les MusicXML obtenus sont fusionnés par partie et mesure.
+   * Oemer reconnaît chaque image en mode TensorFlow CPU 2.15.1 (Keras 2), nécessaire pour désérialiser la configuration historique de ses checkpoints. OpenCV headless reste en version 4.11 pour la compatibilité avec NumPy 1.x.
 2. **Erreur explicite :**
    * Si Oemer échoue, dépasse son délai maximal ou ne produit pas de MusicXML exploitable, la tâche passe à `STATUS_FAILED`.
    * Si la conversion music21 échoue ou ne génère pas de MIDI valide, la tâche passe à `STATUS_FAILED`.
