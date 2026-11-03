@@ -27,57 +27,130 @@ class _MelodiScanBackgroundPainter extends CustomPainter {
         ..shader = const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF101628), Color(0xFF0B101B), Color(0xFF0A0D16)],
+          colors: [
+            Color(0xFF11182A),
+            Color(0xFF0B111D),
+            Color(0xFF080D17),
+          ],
+          stops: [0, 0.52, 1],
         ).createShader(bounds),
     );
 
-    final glowPaint = Paint()
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 90);
-    glowPaint.color = const Color(0xFF7757C8).withValues(alpha: 0.18);
-    canvas.drawCircle(
-        Offset(size.width * 0.92, size.height * 0.07), 150, glowPaint);
-    glowPaint.color = const Color(0xFF1F8A8B).withValues(alpha: 0.10);
-    canvas.drawCircle(
-        Offset(size.width * 0.02, size.height * 0.72), 130, glowPaint);
+    _drawGlow(
+      canvas,
+      Offset(size.width * 0.97, size.height * 0.08),
+      size.shortestSide * 0.72,
+      const Color(0xFF7956D9),
+      0.22,
+    );
+    _drawGlow(
+      canvas,
+      Offset(size.width * 0.02, size.height * 0.72),
+      size.shortestSide * 0.68,
+      const Color(0xFF20B8A7),
+      0.14,
+    );
+    _drawGlow(
+      canvas,
+      Offset(size.width * 0.68, size.height * 0.56),
+      size.shortestSide * 0.52,
+      const Color(0xFF3154A5),
+      0.08,
+    );
 
-    final staffPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.035)
+    final contourPaint = Paint()
+      ..color = const Color(0xFFB69CFF).withValues(alpha: 0.055)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
-    final staffPath = Path();
-    final startX = size.width * 0.52;
-    final endX = size.width + 20;
-    for (var line = 0; line < 5; line++) {
-      final y = size.height * 0.12 + line * 14.0;
-      staffPath
-        ..moveTo(startX, y)
+    for (var band = 0; band < 4; band++) {
+      final path = Path()
+        ..moveTo(size.width * 0.52, size.height * (0.25 + band * 0.035))
         ..cubicTo(
-            size.width * 0.7, y - 28, size.width * 0.84, y + 28, endX, y - 5);
+          size.width * 0.78,
+          size.height * (0.10 + band * 0.025),
+          size.width * 0.76,
+          size.height * (0.44 + band * 0.03),
+          size.width * 1.08,
+          size.height * (0.31 + band * 0.035),
+        );
+      canvas.drawPath(path, contourPaint);
     }
-    canvas.drawPath(staffPath, staffPaint);
 
-    final notePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.045)
+    final staffPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.055)
       ..style = PaintingStyle.fill;
-    for (final note in [
-      Offset(size.width * 0.71, size.height * 0.105),
-      Offset(size.width * 0.88, size.height * 0.075),
-    ]) {
-      canvas.save();
-      canvas.translate(note.dx, note.dy);
-      canvas.rotate(-0.3);
-      canvas.drawOval(
-          Rect.fromCenter(center: Offset.zero, width: 13, height: 8),
-          notePaint);
-      canvas.restore();
-      canvas.drawLine(
-        note,
-        note.translate(0, -42),
+    final staffRect = Rect.fromLTWH(
+      size.width * 0.51,
+      size.height * 0.09,
+      size.width * 0.6,
+      size.height * 0.12,
+    );
+    for (var line = 0; line < 5; line++) {
+      final y = staffRect.top + line * staffRect.height / 4;
+      final path = Path()
+        ..moveTo(staffRect.left, y)
+        ..cubicTo(
+          size.width * 0.70,
+          y - size.height * 0.025,
+          size.width * 0.86,
+          y + size.height * 0.025,
+          size.width * 1.08,
+          y - size.height * 0.005,
+        );
+      canvas.drawPath(
+        path,
         Paint()
-          ..color = notePaint.color
-          ..strokeWidth = 1.5,
+          ..color = Colors.white.withValues(alpha: 0.035)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
       );
     }
+
+    _drawNote(
+        canvas, Offset(size.width * 0.69, size.height * 0.14), staffPaint);
+    _drawNote(
+        canvas, Offset(size.width * 0.88, size.height * 0.105), staffPaint);
+  }
+
+  void _drawGlow(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    Color color,
+    double opacity,
+  ) {
+    final bounds = Rect.fromCircle(center: center, radius: radius);
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            color.withValues(alpha: opacity),
+            color.withValues(alpha: opacity * 0.42),
+            color.withValues(alpha: 0),
+          ],
+          stops: const [0, 0.38, 1],
+        ).createShader(bounds),
+    );
+  }
+
+  void _drawNote(Canvas canvas, Offset position, Paint paint) {
+    canvas.save();
+    canvas.translate(position.dx, position.dy);
+    canvas.rotate(-0.32);
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset.zero, width: 13, height: 8),
+      paint,
+    );
+    canvas.drawLine(
+      const Offset(5, 0),
+      const Offset(5, -38),
+      Paint()
+        ..color = paint.color
+        ..strokeWidth = 1.5,
+    );
+    canvas.restore();
   }
 
   @override
