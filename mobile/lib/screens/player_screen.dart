@@ -1006,6 +1006,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 : 'Lire',
                   ),
                   style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 52),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 28,
                       vertical: 14,

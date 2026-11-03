@@ -459,6 +459,46 @@ void main() {
     expect(playback.stopCount, 1);
   });
 
+  testWidgets('playback button has finite width with the app-wide theme',
+      (tester) async {
+    tester.view.physicalSize = const Size(480, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = MockClient((request) async => _playerResponse(request));
+    final theme = ThemeData.dark().copyWith(
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(52),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: theme,
+          home: PlayerScreen(
+            taskId: 'narrow_screen_task',
+            title: 'Narrow screen',
+            serverUrl: 'http://localhost:8080',
+            httpClient: client,
+            midiPlayback: FakeMidiPlayback(),
+            scoreRenderer: _renderTestScore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final playButton = find.byKey(const Key('play_pause_fab'));
+    expect(playButton, findsOneWidget);
+    expect(tester.getRect(playButton).left, greaterThanOrEqualTo(0));
+    expect(tester.getRect(playButton).right, lessThanOrEqualTo(480));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Player configuration exposes instrument, tempo, and volume',
       (tester) async {
     final client = MockClient((request) async => _playerResponse(request));
