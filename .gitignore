@@ -29,7 +29,8 @@ data/temp/
 data/library/
 data/apk/
 data/android-config/
-data/firebase/
+data/firebase/google-services.json
+data/firebase/service-account.json
 data/caddy/
 data/caddy-root.crt
 melodiscan-root.crt

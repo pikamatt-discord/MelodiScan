@@ -31,13 +31,12 @@ L’APK se télécharge depuis le dashboard après authentification. Le déploie
 
 Pour recevoir une notification lorsque l’application est en arrière-plan :
 
-1. Créez un projet Firebase, activez **Firebase Cloud Messaging** et ajoutez une application Android avec l’identifiant `com.melodiscan.melodiscan_mobile`.
-2. Déposez dans `data/firebase/` :
-   - `google-services.json` de l’application Android Firebase ;
-   - `service-account.json`, clé d’un compte de service autorisé à envoyer les messages FCM dans ce même projet.
-3. Relancez `./install.sh`.
+1. Dans la [console Firebase](https://console.firebase.google.com/), créez un projet, activez **Firebase Cloud Messaging** et ajoutez une application Android avec l’identifiant `com.melodiscan.melodiscan_mobile`. Téléchargez son `google-services.json`.
+2. Dans **Paramètres du projet → Comptes de service → Firebase Admin SDK**, cliquez sur **Générer une nouvelle clé privée** et confirmez. Un fichier JSON est téléchargé : renommez-le `service-account.json`. Si l’envoi FCM est refusé pour permissions insuffisantes, dans la console Google Cloud du même projet, accordez au compte de service le rôle **Firebase Cloud Messaging Admin**.
+3. Depuis le dossier `MelodiScan`, ouvrez [`data/firebase/`](data/firebase/) et déposez-y les deux fichiers : `google-services.json` et `service-account.json`.
+4. Relancez `./install.sh`.
 
-Le compte de service reste côté serveur : seul le worker y accède. Le générateur APK reçoit uniquement `google-services.json`. Ne partagez pas ces identifiants ; ils sont exclus de Git. Sans les deux fichiers, le scan fonctionne mais aucune notification push n’est envoyée.
+Le fichier téléchargé contient une clé privée : ne le partagez pas, ne l’envoyez pas par courriel et ne l’ajoutez jamais à Git. Seul le worker y accède ; le générateur APK reçoit uniquement `google-services.json`. Sans ces deux fichiers, le scan fonctionne mais aucune notification push n’est envoyée.
 
 ## Traitement des partitions
 
