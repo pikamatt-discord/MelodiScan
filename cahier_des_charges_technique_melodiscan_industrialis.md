@@ -90,7 +90,7 @@ Le serveur s’appuie sur un seul moteur OMR : une défaillance remonte à l’u
    * Les PDF multipages sont rasterisés page par page avec `pdf2image` et Poppler.
    * Oemer reconnaît chaque image en mode TensorFlow CPU 2.15.1 (Keras 2), nécessaire pour désérialiser la configuration historique de ses checkpoints. OpenCV headless reste en version 4.11 pour la compatibilité avec NumPy 1.x.
 2. **Erreur explicite :**
-   * Si Oemer échoue, dépasse son délai maximal ou ne produit pas de MusicXML exploitable, la tâche passe à `STATUS_FAILED`.
+   * Chaque page bénéficie d’un délai Oemer d’une heure ; si Oemer échoue, dépasse ce délai ou ne produit pas de MusicXML exploitable, la tâche passe à `STATUS_FAILED`.
    * Si la conversion music21 échoue ou ne génère pas de MIDI valide, la tâche passe à `STATUS_FAILED`.
 
 ### 3.4 Pipeline de Traitement Musical (`music21` Core)
@@ -122,11 +122,11 @@ Le fichier `.musicxml` généré est conservé comme source visuelle et converti
 
 | Critère | Cible / Spécification |
 | :--- | :--- |
-| **Temps de traitement global** | $< 8$ secondes sur AMD64 / $< 18$ secondes sur Raspberry Pi 4. |
-| **Poids de l'image transmise** | $< 500$ Ko grâce à la binarisation locale. |
-| **Disponibilité Serveur** | Auto-healing Docker (redémarrage automatique en cas de crash JVM). |
-| **Sécurité & Confidentialité** | 100% Hors-ligne / Aucune télémétrie externe / Authentification via API Key locale. |
-| **Consommation Mémoire Client** | $< 120$ Mo RAM sur Android durant la restitution SoundFont. |
+| **Durée OMR** | Limite de 1 heure par page ; la durée réelle dépend du document et des ressources du serveur. |
+| **Taille des fichiers** | 20 Mio maximum par fichier par défaut ; les pages PDF sont rasterisées à 300 DPI sur le serveur. |
+| **Disponibilité serveur** | Les services Docker Compose redémarrent automatiquement après un arrêt ou un redémarrage du conteneur. |
+| **Sécurité et confidentialité** | API Key et connexion dashboard configurables. Gemini et Firebase sont facultatifs et impliquent des communications vers les services Google correspondants. |
+| **Ressources client** | Le SoundFont est embarqué dans l’application ; la consommation mémoire dépend de l’appareil et du document. |
 
 ---
 
@@ -176,5 +176,5 @@ services:
 ## 7. Roadmap de Développement
 
 * **Phase 1 (MVP Industrialisé) :** Pipeline Flutter + FastAPI + Oemer + `pdf2image` + `music21` ; SoundFont et Verovio embarqués sur mobile.
-* **Phase 2 (Scalabilité) :** Intégration de Celery/Redis, streaming SSE et support Docker multi-arch (ARM/AMD).
+* **Phase 2 (Scalabilité) :** Celery/Redis et le suivi SSE sont intégrés ; le support Docker multi-architecture (ARM/AMD) reste à valider.
 * **Phase 3 (Fonctionnalités Avancées) :** Polyphonie simplifiée (portées multiples), édition corrective manuelle sur l'application mobile et synchronisation multi-appareils locaux.

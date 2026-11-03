@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 from xml.etree import ElementTree
 
+OEMER_TIMEOUT_SECONDS = 60 * 60
+
 
 def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
@@ -145,7 +147,7 @@ class OMREngine:
                         command,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
-                        timeout=600,
+                        timeout=OEMER_TIMEOUT_SECONDS,
                         check=False,
                         text=True,
                         encoding="utf-8",

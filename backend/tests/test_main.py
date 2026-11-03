@@ -41,6 +41,7 @@ def clear_local_tasks(monkeypatch, tmp_path):
 def test_health_reports_unavailable_dependencies(monkeypatch):
     monkeypatch.setattr(main, "get_redis_client", lambda: None)
     monkeypatch.setattr(main.importlib.util, "find_spec", lambda _name: None)
+    monkeypatch.setenv("MELODISCAN_VERSION", "abc123def456")
 
     async def builder_unavailable(_method, _path):
         return 503, {"status": "degraded"}
@@ -52,6 +53,7 @@ def test_health_reports_unavailable_dependencies(monkeypatch):
     assert response.json() == {
         "status": "degraded",
         "service": "MelodiScan Engine",
+        "version": "abc123def456",
         "dependencies": {
             "redis": False,
             "celery_worker": False,
@@ -90,7 +92,7 @@ def test_scan_score_queues_valid_image(monkeypatch):
     response = client.post(
         "/api/v1/scan",
         files={"file": ("score.png", PNG_BYTES, "image/png")},
-        data={"title": "Test Piece"},
+        data={"title": "Test Piece", "notification_token": "fcm-test-token"},
     )
 
     assert response.status_code == 200
@@ -99,6 +101,7 @@ def test_scan_score_queues_valid_image(monkeypatch):
     task = get_task_state(data["task_id"])
     assert task["title"] == "Test Piece"
     assert task["profile_id"] == "profile-1"
+    assert task["notification_token"] == "fcm-test-token"
     assert Path(task["file_path"]).read_bytes() == PNG_BYTES
     assert "score.png" in Path(task["logs_path"]).read_text()
 
@@ -364,9 +367,11 @@ def test_omr_engine_runs_oemer_for_image_and_uses_its_musicxml(tmp_path, monkeyp
     input_path.write_bytes(PNG_BYTES)
     musicxml = b"<score-partwise><part-list/></score-partwise>"
     calls = []
+    timeouts = []
 
-    def run(command, **_kwargs):
+    def run(command, **kwargs):
         calls.append(command)
+        timeouts.append(kwargs["timeout"])
         output_path = Path(command[command.index("--output-path") + 1])
         output_path.write_bytes(musicxml)
         return subprocess.CompletedProcess(command, 0, stdout="Oemer completed")
@@ -381,6 +386,7 @@ def test_omr_engine_runs_oemer_for_image_and_uses_its_musicxml(tmp_path, monkeyp
     assert "--use-tf" in calls[0]
     output_path = Path(calls[0][calls[0].index("--output-path") + 1])
     assert output_path.name == "recognized.musicxml"
+    assert timeouts == [3600]
 
 
 def test_omr_engine_rasterizes_and_merges_multipage_pdf(tmp_path, monkeypatch):
@@ -455,7 +461,13 @@ def test_worker_persists_processing_error(tmp_path, monkeypatch):
         "status": "STATUS_QUEUED",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "logs_path": str(logs_path),
+        "notification_token": "failed-task-fcm-token",
     })
+    notifications = []
+    monkeypatch.setattr(
+        "app.tasks.send_task_notification",
+        lambda *args: notifications.append(args),
+    )
 
     def fail_processing(*_args):
         raise OMRProcessingError("Oemer unavailable")
@@ -469,6 +481,14 @@ def test_worker_persists_processing_error(tmp_path, monkeypatch):
     assert task["status"] == "STATUS_FAILED"
     assert task["error"] == "Oemer unavailable"
     assert task["failed_at"]
+    assert "notification_token" not in task
+    assert notifications == [(
+        "failed-worker-task",
+        "STATUS_FAILED",
+        "Test",
+        "failed-task-fcm-token",
+        task["error_summary"],
+    )]
     logs = logs_path.read_text(encoding="utf-8")
     assert "Lancement de la reconnaissance Oemer." in logs
     assert "Échec du traitement : Oemer unavailable" in logs
@@ -560,7 +580,13 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
         "task_id": "successful-log-task",
         "status": "STATUS_QUEUED",
         "logs_path": str(logs_path),
+        "notification_token": "successful-task-fcm-token",
     })
+    notifications = []
+    monkeypatch.setattr(
+        "app.tasks.send_task_notification",
+        lambda *args: notifications.append(args),
+    )
     full_oemer_output = "INFO processing\n" + ("complete detail\n" * 1000)
 
     musicxml_path = tmp_path / "score.musicxml"
@@ -601,6 +627,13 @@ def test_worker_keeps_full_logs_for_successful_processing(tmp_path, monkeypatch)
     assert task["title"] == "Title from Gemini"
     assert task["score_metadata"]["title"] == "Title from Gemini"
     assert task["score_metadata"]["title_source"] == "gemini"
+    assert "notification_token" not in task
+    assert notifications == [(
+        "successful-log-task",
+        "STATUS_COMPLETED",
+        "Title from Gemini",
+        "successful-task-fcm-token",
+    )]
     assert task["score_metadata"]["parts"][0]["name"] == "Flute"
     assert Path(task["source_path"]).read_bytes() == PNG_BYTES
     assert Path(task["midi_path"]).read_bytes() == b"MThd test midi"
@@ -798,17 +831,20 @@ def test_result_requires_completed_task(tmp_path):
     assert failed.json()["detail"] == "Oemer unavailable"
 
 
-def test_status_stream_times_out_with_a_real_failure(monkeypatch):
-    monkeypatch.setattr(main, "TASK_TIMEOUT_SECONDS", 0)
+def test_status_stream_does_not_fail_a_running_task(monkeypatch):
     set_task_state("stalled-task", {"status": "STATUS_QUEUED"})
+
+    async def finish_task(_delay):
+        set_task_state("stalled-task", {"status": "STATUS_COMPLETED"})
+
+    monkeypatch.setattr(main.asyncio, "sleep", finish_task)
 
     response = client.get("/api/v1/stream/stalled-task")
 
     assert response.status_code == 200
-    assert '"status": "STATUS_FAILED"' in response.text
-    assert "dashboard" in response.text
-    assert "timed out" not in response.text
-    assert get_task_state("stalled-task")["error"] == "Image processing timed out after 0 seconds."
+    assert '"status": "STATUS_QUEUED"' in response.text
+    assert '"status": "STATUS_COMPLETED"' in response.text
+    assert get_task_state("stalled-task")["status"] == "STATUS_COMPLETED"
 
 
 def test_result_returns_only_the_completed_midi_file(tmp_path):

@@ -17,6 +17,7 @@ mobile/.dart_tool/
 mobile/.pub-cache/
 mobile/.pub/
 mobile/.idea/
+mobile/android/.kotlin/
 backend/dashboard/node_modules/
 backend/dashboard/dist/
 
@@ -28,7 +29,9 @@ data/temp/
 data/library/
 data/apk/
 data/android-config/
+data/firebase/
 data/caddy/
 data/caddy-root.crt
 melodiscan-root.crt
+mobile/android/app/google-services.json
 *.log

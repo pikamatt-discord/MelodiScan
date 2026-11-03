@@ -21,6 +21,10 @@ WORKSPACE = Path("/workspace/mobile")
 APK_PATH = Path("/output/app-release.apk")
 METADATA_PATH = Path("/output/app-release.json")
 CA_PATH = Path(os.environ.get("MELODISCAN_CA_PATH", "/run/secrets/caddy-root.crt"))
+FIREBASE_CONFIG_PATH = Path(os.environ.get(
+    "FIREBASE_CONFIG_PATH", "/firebase/google-services.json"
+))
+WORKSPACE_FIREBASE_CONFIG = WORKSPACE / "android/app/google-services.json"
 API_KEY = os.environ.get("API_KEY", "")
 HOST = os.environ.get("MELODISCAN_HOST", "")
 STATE_LOCK = threading.Lock()
@@ -39,10 +43,12 @@ def now() -> str:
 def build_input_fingerprint() -> str:
     digest = hashlib.sha256()
     ca_bytes = CA_PATH.read_bytes()
+    firebase_config = load_firebase_config()
     config = {
         "api_url": f"https://{HOST}",
         "api_key": API_KEY,
         "ca_sha256": hashlib.sha256(ca_bytes).hexdigest(),
+        "firebase_config_sha256": hashlib.sha256(firebase_config).hexdigest(),
         "build_environment": BUILD_ENVIRONMENT,
     }
     digest.update(json.dumps(config, sort_keys=True).encode("utf-8"))
@@ -61,11 +67,27 @@ def build_input_fingerprint() -> str:
                 continue
             path = Path(root) / filename
             relative_path = path.relative_to(WORKSPACE).as_posix()
+            if relative_path == "android/app/google-services.json":
+                continue
             digest.update(relative_path.encode("utf-8"))
             with path.open("rb") as source_file:
                 for block in iter(lambda: source_file.read(1024 * 1024), b""):
                     digest.update(block)
     return digest.hexdigest()
+
+
+def load_firebase_config() -> bytes:
+    if not FIREBASE_CONFIG_PATH.is_file() or FIREBASE_CONFIG_PATH.stat().st_size == 0:
+        return b""
+
+    content = FIREBASE_CONFIG_PATH.read_bytes()
+    try:
+        config = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Le fichier Firebase google-services.json est invalide.") from exc
+    if not isinstance(config, dict) or not config.get("client"):
+        raise RuntimeError("Le fichier Firebase google-services.json ne contient aucun client Android.")
+    return content
 
 
 def artifact_info() -> dict:
@@ -113,7 +135,21 @@ def build_apk(build_id: str) -> None:
     defines_path = None
     staged_apk = None
     staged_metadata = None
+    staged_firebase_config = False
     try:
+        firebase_config = load_firebase_config()
+        firebase_config_enabled = bool(firebase_config)
+        if firebase_config_enabled:
+            if WORKSPACE_FIREBASE_CONFIG.exists():
+                if WORKSPACE_FIREBASE_CONFIG.read_bytes() != firebase_config:
+                    raise RuntimeError(
+                        "Un fichier google-services.json différent existe déjà dans le projet mobile."
+                    )
+            else:
+                WORKSPACE_FIREBASE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+                WORKSPACE_FIREBASE_CONFIG.write_bytes(firebase_config)
+                staged_firebase_config = True
+
         input_fingerprint = build_input_fingerprint()
         ca_base64 = base64.b64encode(CA_PATH.read_bytes()).decode("ascii")
         with tempfile.NamedTemporaryFile(
@@ -123,6 +159,7 @@ def build_apk(build_id: str) -> None:
                 "MELODISCAN_API_URL": f"https://{HOST}",
                 "MELODISCAN_API_KEY": API_KEY,
                 "MELODISCAN_ROOT_CA_BASE64": ca_base64,
+                "MELODISCAN_FCM_ENABLED": str(firebase_config_enabled).lower(),
             }, defines_file)
             defines_path = Path(defines_file.name)
         defines_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
@@ -231,6 +268,11 @@ def build_apk(build_id: str) -> None:
             error=str(exc)[-MAX_LOG_LENGTH:],
         )
     finally:
+        if staged_firebase_config:
+            try:
+                WORKSPACE_FIREBASE_CONFIG.unlink()
+            except FileNotFoundError:
+                pass
         if defines_path is not None:
             try:
                 defines_path.unlink()

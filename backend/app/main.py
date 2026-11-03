@@ -49,7 +49,6 @@ DASHBOARD_SESSION_SECRET = (
 DASHBOARD_SESSION_COOKIE = "melodiscan_dashboard_session"
 DASHBOARD_SESSION_MAX_AGE = 8 * 60 * 60
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 20 * 1024 * 1024))
-TASK_TIMEOUT_SECONDS = int(os.getenv("TASK_TIMEOUT_SECONDS", 600))
 APK_BUILDER_URL = os.getenv("APK_BUILDER_URL", "http://melodiscan-apk-builder:8090")
 MELODISCAN_HOST = os.getenv("MELODISCAN_HOST", "")
 SCORE_MEDIA_TYPES = {
@@ -341,6 +340,7 @@ async def health_check():
         content={
             "status": status,
             "service": "MelodiScan Engine",
+            "version": os.getenv("MELODISCAN_VERSION", "unknown"),
             "dependencies": dependencies,
         },
     )
@@ -542,6 +542,7 @@ async def scan_score(
     file: UploadFile = File(...),
     title: str = Form("", max_length=200),
     profile_id: str = Form(DEFAULT_PROFILES[0][0]),
+    notification_token: str | None = Form(None, max_length=4096),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -590,7 +591,8 @@ async def scan_score(
         "created_at": now,
         "file_path": temp_file_path,
         "logs_path": log_path,
-        "midi_path": None
+        "midi_path": None,
+        "notification_token": notification_token,
     }
     set_task_state(task_id, task_info)
 
@@ -707,8 +709,7 @@ async def stream_task_status(task_id: str):
     async def event_generator() -> AsyncGenerator[str, None]:
         last_status = None
         loop = asyncio.get_running_loop()
-        started = loop.time()
-        last_heartbeat = started
+        last_heartbeat = loop.time()
         progress_by_status = {
             "STATUS_QUEUED": 0.0,
             "STATUS_PROCESSING_IMAGE": 0.1,
@@ -747,23 +748,6 @@ async def stream_task_status(task_id: str):
                 break
 
             now = loop.time()
-            if now - started >= TASK_TIMEOUT_SECONDS:
-                task_info.update({
-                    "status": "STATUS_FAILED",
-                    "error": f"Image processing timed out after {TASK_TIMEOUT_SECONDS} seconds.",
-                    "error_summary": "Le traitement a expiré. Consultez les diagnostics dans le dashboard.",
-                    "failed_at": datetime.now(timezone.utc).isoformat(),
-                })
-                set_task_state(task_id, task_info)
-                data = json.dumps({
-                    "task_id": task_id,
-                    "status": "STATUS_FAILED",
-                    "progress": 0.0,
-                    "error": task_info["error_summary"],
-                })
-                yield f"data: {data}\n\n"
-                break
-
             if now - last_heartbeat >= 15:
                 yield ": keep-alive\n\n"
                 last_heartbeat = now

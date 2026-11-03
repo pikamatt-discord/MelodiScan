@@ -239,7 +239,20 @@ fi
 [[ "$LAN_IP" != 127.* ]] || fail "Impossible de détecter une adresse IPv4 du réseau local."
 success "Adresse du serveur détectée : $LAN_IP"
 
-mkdir -p data/temp data/apk
+mkdir -p data/temp data/apk data/firebase
+chmod 700 data/firebase
+if [[ ! -e data/firebase/google-services.json ]]; then
+  touch data/firebase/google-services.json
+fi
+chmod 600 data/firebase/google-services.json
+if [[ -f data/firebase/service-account.json ]]; then
+  chmod 600 data/firebase/service-account.json
+fi
+if [[ -s data/firebase/google-services.json && -s data/firebase/service-account.json ]]; then
+  success "Configuration des notifications Firebase détectée"
+else
+  info "Notifications facultatives : placez google-services.json et service-account.json dans data/firebase/ puis relancez install.sh."
+fi
 touch .env
 touch data/caddy-root.crt
 chmod 600 .env
@@ -275,6 +288,11 @@ set_env DASHBOARD_SESSION_SECRET "$DASHBOARD_SESSION_SECRET"
 set_env DASHBOARD_USERNAME "$DASHBOARD_USERNAME"
 set_env DASHBOARD_PASSWORD "$DASHBOARD_PASSWORD"
 set_env MELODISCAN_HOST "$LAN_IP"
+MELODISCAN_VERSION="$(git rev-parse --short=12 HEAD)"
+if [[ -n "$(git status --porcelain)" ]]; then
+  MELODISCAN_VERSION="${MELODISCAN_VERSION}+local"
+fi
+set_env MELODISCAN_VERSION "$MELODISCAN_VERSION"
 
 GEMINI_API_KEY="${GEMINI_API_KEY:-$(get_env GEMINI_API_KEY)}"
 if [[ -r /dev/tty && -w /dev/tty ]]; then

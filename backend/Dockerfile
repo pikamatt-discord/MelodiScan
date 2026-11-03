@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+ARG MELODISCAN_VERSION=unknown
+ENV MELODISCAN_VERSION=${MELODISCAN_VERSION}
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

@@ -34,6 +34,14 @@ def prepare_builder(tmp_path, monkeypatch):
     monkeypatch.setattr(apk_builder, "APK_PATH", output / "app-release.apk")
     monkeypatch.setattr(apk_builder, "METADATA_PATH", output / "app-release.json")
     monkeypatch.setattr(apk_builder, "CA_PATH", ca_file)
+    firebase_config = tmp_path / "firebase" / "google-services.json"
+    firebase_config.parent.mkdir()
+    monkeypatch.setattr(apk_builder, "FIREBASE_CONFIG_PATH", firebase_config)
+    monkeypatch.setattr(
+        apk_builder,
+        "WORKSPACE_FIREBASE_CONFIG",
+        workspace / "android/app/google-services.json",
+    )
     monkeypatch.setattr(apk_builder, "API_KEY", "test-api-key")
     monkeypatch.setattr(apk_builder, "HOST", "192.168.1.25")
     with apk_builder.STATE_LOCK:
@@ -85,6 +93,7 @@ def test_build_creates_signed_release_artifact_with_deployment_defines(tmp_path,
         "MELODISCAN_API_URL": "https://192.168.1.25",
         "MELODISCAN_API_KEY": "test-api-key",
         "MELODISCAN_ROOT_CA_BASE64": base64.b64encode(b"test-root-certificate").decode("ascii"),
+        "MELODISCAN_FCM_ENABLED": "false",
     }
 
 
@@ -118,6 +127,40 @@ def test_build_input_fingerprint_tracks_mobile_and_deployment_inputs(tmp_path, m
 
     apk_builder.CA_PATH.write_bytes(b"updated-root-certificate")
     assert apk_builder.build_input_fingerprint() != key_changed
+
+
+def test_firebase_config_changes_build_fingerprint_and_is_staged_only_for_build(
+    tmp_path, monkeypatch
+):
+    workspace, _built_apk, _output = prepare_builder(tmp_path, monkeypatch)
+    firebase_config = b'{"client":[{"client_info":{"mobilesdk_app_id":"test"}}]}'
+    apk_builder.FIREBASE_CONFIG_PATH.write_bytes(firebase_config)
+    initial_fingerprint = apk_builder.build_input_fingerprint()
+    staged_during_build = []
+    defines = {}
+
+    def run(command, **_kwargs):
+        if command[1:4] == ["build", "apk", "--release"]:
+            staged_during_build.append(
+                apk_builder.WORKSPACE_FIREBASE_CONFIG.read_bytes()
+            )
+            defines_arg = next(
+                argument for argument in command
+                if argument.startswith("--dart-define-from-file=")
+            )
+            defines.update(
+                json.loads(Path(defines_arg.split("=", 1)[1]).read_text(encoding="utf-8"))
+            )
+            return CompletedProcess(command, 1, "Expected build failure", None)
+        return CompletedProcess(command, 0, "Success\n", None)
+
+    monkeypatch.setattr(apk_builder.subprocess, "run", run)
+    apk_builder.build_apk("test-build")
+
+    assert staged_during_build == [firebase_config]
+    assert defines["MELODISCAN_FCM_ENABLED"] == "true"
+    assert not apk_builder.WORKSPACE_FIREBASE_CONFIG.exists()
+    assert apk_builder.build_input_fingerprint() == initial_fingerprint
 
 
 def test_failed_flutter_build_reports_error_and_preserves_no_success_state(tmp_path, monkeypatch):

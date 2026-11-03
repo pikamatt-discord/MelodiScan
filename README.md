@@ -1,96 +1,14 @@
-# 🎵 MelodiScan Enterprise & Self-Hosted Open-Source Ecosystem
+# MelodiScan
 
-<p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="220" height="220">
-    <defs>
-      <!-- Dégradés -->
-      <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#9D4EDD" />
-        <stop offset="100%" stop-color="#4A00E0" />
-      </linearGradient>
-      <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="#00F2FE" />
-        <stop offset="100%" stop-color="#4FACFE" />
-      </linearGradient>
-    </defs>
-    <!-- Arrière-plan style App Icon (Squircle) -->
-    <rect width="512" height="512" rx="115" fill="#0D0E15" />
-    <!-- Viseur de Scan Optique (Coins) -->
-    <g stroke="url(#cyanGrad)" stroke-width="10" stroke-linecap="round" fill="none">
-      <!-- Haut-Gauche -->
-      <path d="M 116 176 L 116 136 Q 116 116 136 116 L 176 116" />
-      <!-- Haut-Droite -->
-      <path d="M 336 116 L 376 116 Q 396 116 396 136 L 396 176" />
-      <!-- Bas-Gauche -->
-      <path d="M 116 336 L 116 376 Q 116 396 136 396 L 176 396" />
-      <!-- Bas-Droite -->
-      <path d="M 336 396 L 376 396 Q 396 396 396 376 L 396 336" />
-    </g>
-    <!-- Onde Sonore / Égaliseur centré -->
-    <g fill="url(#purpleGrad)">
-      <rect x="160" y="226" width="18" height="60" rx="9" />
-      <rect x="196" y="186" width="18" height="140" rx="9" />
-      <rect x="232" y="156" width="18" height="200" rx="9" />
-      <!-- Barre centrale -->
-      <rect x="268" y="136" width="18" height="240" rx="9" fill="url(#cyanGrad)" />
-      <rect x="304" y="176" width="18" height="160" rx="9" />
-      <rect x="340" y="206" width="18" height="100" rx="9" />
-    </g>
-  </svg>
-</p>
+MelodiScan convertit des photos et des PDF de partitions en fichiers MusicXML et MIDI. La reconnaissance s’exécute sur un serveur auto-hébergé ; l’application Android affiche la partition et permet de l’écouter.
 
-**MelodiScan** est un prototype open-source et auto-hébergeable qui envoie une image ou un document PDF de partition à un serveur OMR, suit le traitement et récupère un résultat MIDI quand la reconnaissance et la conversion aboutissent. Il ne simule pas de résultat lorsque le traitement échoue.
+Le projet utilise Flutter, FastAPI, Celery, Redis, Oemer, music21 et Verovio. Le traitement continue côté serveur si l’application est fermée. Les notifications de fin d’analyse sont facultatives.
 
-Dépôt Officiel GitHub : **`https://github.com/pikamatt-discord/MelodiScan`**
+> Projet en développement : la reconnaissance dépend du document et peut échouer. Aucun résultat de remplacement n’est créé.
 
----
+## Installation
 
-## 📊 Récapitulatif du Projet & État d'Avancement (Project Status)
-
-### 📌 1. Bilan de ce qui a été Réalisé (Implemented Features)
-
-| Composant | Statut | Fonctionnalités Déployées |
-| :--- | :--- | :--- |
-| **API Backend (FastAPI)** | Prototype | Envoi d’une image ou d’un PDF par tâche, suivi SSE, téléchargement MIDI et MusicXML reconnus après succès, statistiques et état de santé des dépendances. |
-| **Moteur OMR** | Intégré à l’image | Oemer reconnaît chaque page image en mode TensorFlow CPU 2.15 (Keras 2, compatible avec la configuration du modèle Oemer). Les PDF sont rasterisés page par page avec `pdf2image`/Poppler et les MusicXML fusionnés dans l’ordre ; toute erreur reste explicite. |
-| **Dashboard serveur** | Opérationnel | Interface React + TypeScript responsive, navigation studio, icônes Lucide, statistiques, état des services, historique filtrable, diagnostics et génération réelle d’un APK Release. |
-| **Conversion audio** | Intégrée au worker | `music21` conserve le MusicXML visuel et produit un MIDI avec vélocité 88, programme Grand Piano 0, reverb CC91=45 et chorus CC93=20. |
-| **Client mobile (Flutter)** | Prototype | Capture ou sélection d’une image, import d’un document PDF complet, suivi SSE, partition engravée sur l’appareil avec Verovio et SVG, vue piano roll en option et lecture MIDI locale avec FluidSynth sur Android/iOS. La banque GeneralUser GS est embarquée dans l’APK ; aucune banque n’est téléchargée après installation. |
-| **Déploiement Docker** | Prototype | `docker-compose.yml` démarre l’API, le worker Celery, Redis et Caddy HTTPS ; l’image backend inclut Oemer et Poppler. |
-| **Tests automatisés** | En cours | Tests ciblés backend et Flutter ; exécuter les commandes de test ci-dessous dans des environnements munis de leurs dépendances. |
-
----
-
-### 🛑 2. Ce qu'il Manque Avant le Passage en Production (Pre-Production Roadmap)
-
-Pour transformer l'environnement actuel de développement/démonstration en une infrastructure de production industrielle à grande échelle, les éléments suivants doivent être complétés :
-
-#### A. Sécurité & Authentification (Security Layer)
-1. **Configuration de l’authentification :** Les endpoints API acceptent une clé `API_KEY` et le dashboard un identifiant/mot de passe configurables. Ils restent désactivés sans ces variables pour le développement local ; ils doivent être activés avant toute exposition réseau. L’intégration JWT reste à évaluer si des comptes multi-utilisateurs deviennent nécessaires.
-2. **Certificat public pour un accès Internet :** Le déploiement fourni utilise Caddy et une CA locale ; un déploiement public devra utiliser un domaine et un certificat reconnu publiquement, par exemple via Let's Encrypt.
-
-#### B. Moteur OMR & Traitement Avancé (OMR Production Integration)
-1. **Amélioration du traitement Oemer :** Ajouter une validation de qualité et une correction manuelle des partitions reconnues.
-2. **Correction Manuelle sur l'Application Mobile :** Ajouter un éditeur interactif permettant à l'utilisateur d'ajuster ou corriger manuellement les notes/mesures mal reconnues sur la partition avant l'exportation finale.
-
-#### C. Performance & Scalabilité (Infrastructure Scaling)
-1. **Optimisation Mémoire de la JVM Headless :** Configurer les limites Xmx/Xms du JVM Java pour libérer automatiquement la RAM de la JVM (< 512 Mo au repos) après inactivité.
-2. **Gestionnaire de Cache Redis Persistant :** Monter un volume persistant Redis (`appendonly yes`) pour conserver l'historique complet des partitions numérisées au redémarrage du serveur.
-
-#### D. Lecture Audio Mobile
-1. **Distribution iOS :** Configurer la signature et la distribution iOS pour accompagner la lecture MIDI et le rendu Verovio désormais intégrés au client.
-
----
-
-## ⚡ Installation & Déploiement 1-Commande (Serveur Ubuntu)
-
-Sur un serveur Ubuntu x86_64 connecté au réseau local, exécutez cette commande depuis n’importe quel terminal :
-
-```bash
-curl -sSL https://raw.githubusercontent.com/pikamatt-discord/MelodiScan/main/install.sh | bash
-```
-
-Elle clone le dépôt dans `~/MelodiScan` si nécessaire. Pour installer depuis une copie déjà clonée :
+Déploiement automatisé pour **Ubuntu x86_64** sur un réseau local :
 
 ```bash
 git clone https://github.com/pikamatt-discord/MelodiScan.git
@@ -99,145 +17,93 @@ chmod +x install.sh
 ./install.sh
 ```
 
-En mode interactif, le menu permet aussi de consulter l’état des services, de les démarrer, arrêter ou redémarrer, et de suivre leurs logs (`Ctrl+C` pour quitter les logs). Le choix par défaut lance l’installation complète ou redéploie la copie locale ; il ne récupère pas automatiquement les changements depuis GitHub. Sans terminal interactif, le script lance directement cette installation par défaut.
+Le script configure Docker, déploie les services, vérifie l’API et génère l’APK. Il affiche les adresses et identifiants à conserver. Une réservation DHCP est recommandée pour stabiliser l’adresse du serveur.
 
-Le script automatise les étapes suivantes :
-1. Installe Docker/Compose si nécessaire et active le service Docker au démarrage d’Ubuntu. Les conteneurs Compose utilisent `restart: always` pour que l’API, le worker, Redis, le générateur APK et Caddy redémarrent avec Docker après un redémarrage du serveur.
-2. Construit l’image backend avec Oemer et Poppler ainsi que l’image Flutter/Android de génération d’APK, puis démarre tous les services.
-3. Détecte l’adresse IPv4 du serveur sur le réseau local et configure HTTPS pour cette adresse, sans réglage DNS.
-4. Génère et conserve la clé API MelodiScan et les identifiants du dashboard dans `.env` (permissions privées). Il propose aussi une saisie masquée de la clé API Gemini, facultative : Entrée conserve une clé existante ou laisse Gemini désactivé lors d’une première installation ; `-` désactive une clé déjà enregistrée. La clé Gemini reste uniquement dans `.env` et est transmise au worker, jamais à l’application mobile.
-5. Récupère la CA publique Caddy et redémarre le proxy et le générateur pour qu’ils utilisent la configuration et le certificat locaux. Interroge ensuite **l’URL HTTPS exacte du serveur** sur `/health`, valide le certificat avec cette CA et exige HTTP 200 ainsi que Redis, le worker, Oemer et le générateur opérationnels.
-6. Compare l’empreinte des sources mobiles, de l’adresse, de la clé API et de la CA avec celle de l’APK signé existant. Il ne recompile que si l’APK est absent, invalide ou si un de ces éléments a changé ; il vérifie tout nouvel APK et le publie dans `data/apk/app-release.apk`. La clé de signature Android est conservée dans `data/android-config` pour que les versions successives puissent mettre à jour l’application installée.
+Le dashboard affiche la version déployée sous forme d’identifiant Git court. Le suffixe `+local` indique que l’installation a été construite avec des modifications locales non enregistrées dans Git.
 
-À la fin, le script affiche l’URL du dashboard et l’URL API copiables, les identifiants et le chemin de l’APK. Il confirme explicitement que `GET https://<IP-du-serveur>/health` a répondu HTTP 200 avec les dépendances requises en ligne. L’URL API intégrée à l’APK est cette adresse réseau vérifiée, jamais `localhost`. Le téléphone doit être sur le même réseau ; installez l’APK fourni, sans configurer de DNS ni installer de certificat sur le téléphone. La clé API est intégrée à cet APK : elle convient à un usage personnel/familial sur réseau local, mais ne constitue pas une authentification individuelle forte.
+- Dashboard : `https://<adresse-ip>/dashboard`
+- Documentation API : `https://<adresse-ip>/docs`
+- État de santé : `https://<adresse-ip>/health`
 
-Caddy utilise une autorité de certification locale conservée dans son volume Docker. Le certificat racine public est installé dans le magasin de confiance du serveur Linux pour que son navigateur puisse ouvrir le dashboard sans avertissement. Un navigateur sur un autre ordinateur/téléphone peut encore demander d’approuver cette CA ; l’application mobile compilée par le script lui fait déjà confiance. Une réservation DHCP est recommandée afin que l’adresse locale du serveur reste stable.
+L’APK se télécharge depuis le dashboard après authentification. Le déploiement utilise le certificat local Caddy et est prévu pour un réseau de confiance, pas pour une exposition directe sur Internet. La clé API intégrée à l’APK ne fournit pas une authentification individuelle.
 
-Le dashboard `/dashboard` est une application React + TypeScript construite avec Vite et intégrée à l’image FastAPI ; ses icônes proviennent de Lucide. Elle permet de consulter les volumes de scans, taux de réussite, échecs, tâches en cours, durée moyenne, services actifs et activité récente. La page `/dashboard/logs` donne accès aux diagnostics détaillés des 50 traitements récents et aux fichiers reçus pour les tâches en échec ; `/dashboard/profiles` permet de renommer les profils. Le bouton **Générer l’application** lance une vraie compilation Flutter Android sur le serveur, avec l’adresse HTTPS, la clé API et la CA du déploiement. La progression et les erreurs sont affichées ; l’APK n’est proposé au téléchargement qu’une fois disponible et validé. Pour développer l’interface localement, lancez l’API sur le port 8080 puis exécutez `cd backend/dashboard && npm ci && npm run dev` ; Vite transmet les appels API à FastAPI. Après un changement d’adresse du serveur, relancez `./install.sh` pour mettre à jour la configuration intégrée dans l’APK. Lors d’une relance sans changement des sources mobiles ni de la configuration, l’installateur réutilise l’APK Release signé existant au lieu de le recompiler.
+## Notifications Android (facultatif)
 
-Le script est destiné à Ubuntu x86_64 et nécessite Internet, Docker, `sudo` lorsque nécessaire et une adresse IPv4 accessible sur le réseau local. Le générateur télécharge une image Flutter/Android volumineuse au premier démarrage ; il n’installe plus le SDK Android sur l’hôte. La version Flutter 3.38.7 est fixée pour obtenir des builds reproductibles. Il s’arrête avec une erreur explicite si le contrôle `/health` ou la compilation échoue, et ne fabrique pas d’APK de remplacement. Le certificat racine public est copié dans `data/caddy-root.crt`; la clé privée de l’autorité reste dans le volume Docker `caddy_data` et ne doit pas être partagée ou supprimée.
+Pour recevoir une notification lorsque l’application est en arrière-plan :
 
-### Validation complète avant de partager l’installation
+1. Créez un projet Firebase, activez **Firebase Cloud Messaging** et ajoutez une application Android avec l’identifiant `com.melodiscan.melodiscan_mobile`.
+2. Déposez dans `data/firebase/` :
+   - `google-services.json` de l’application Android Firebase ;
+   - `service-account.json`, clé d’un compte de service autorisé à envoyer les messages FCM dans ce même projet.
+3. Relancez `./install.sh`.
 
-Après l’installation, depuis le dossier `MelodiScan`, lancez une seule commande :
+Le compte de service reste côté serveur : seul le worker y accède. Le générateur APK reçoit uniquement `google-services.json`. Ne partagez pas ces identifiants ; ils sont exclus de Git. Sans les deux fichiers, le scan fonctionne mais aucune notification push n’est envoyée.
 
-```bash
-bash test-complet.sh
-```
+## Traitement des partitions
 
-Le rapport vérifie la configuration et le build Docker/Oemer, lance les tests pytest du backend dans un conteneur isolé, puis exécute l’analyse et les tests Flutter dans le générateur Android conteneurisé. Si les services sont démarrés, il vérifie HTTPS avec la CA et le résultat complet de `/health`, l’authentification et les endpoints ; il déclenche ensuite une vraie compilation APK via le même endpoint que le dashboard, vérifie le ZIP, le manifeste et la signature Android, puis contrôle le téléchargement. Il envoie aussi volontairement une image PNG invalide pour vérifier la propagation de l’échec OMR sans faux MIDI. Ce test peut prendre plusieurs minutes selon le cache Gradle. La tâche de scan d’essai est retirée de l’historique Redis. Le script ne démarre ni n’arrête les services. Copiez toute la sortie affichée ; elle n’inclut pas les secrets du fichier `.env`.
+Formats acceptés : PNG, JPEG, WebP et PDF, jusqu’à **20 Mio** par défaut. Les PDF sont rasterisés à 300 DPI. Oemer dispose d’un maximum d’**une heure par page** ; c’est une limite, pas une estimation. La durée réelle dépend du document et du serveur.
 
-Le script n’évalue pas la qualité de reconnaissance d’une partition valide : le dépôt ne fournit pas de partition de test de référence. Ce contrôle nécessite un vrai scan de partition et une sortie MIDI attendue à comparer.
+Les résultats réussis (source, MusicXML et MIDI) sont conservés dans `data/library`. Sauvegardez ce dossier. Les échecs sont signalés dans l’application et les diagnostics ; aucun MIDI fictif n’est produit.
 
-L’API sur le port 8080 reste accessible uniquement depuis la machine hôte pour le développement ; les appareils du réseau passent par HTTPS sur le port 443. Sans Redis, worker, Oemer ou générateur APK, `/health` retourne `503` avec le détail des dépendances. Oemer, TensorFlow CPU 2.15.1 et Poppler sont installés pendant la construction de l’image backend ; les modèles Oemer sont téléchargés lors de la première reconnaissance. Le mode TensorFlow avec Keras 2 est nécessaire pour désérialiser l’architecture historique des checkpoints Oemer ; `opencv-python-headless` est limité à la série 4.11 pour rester compatible avec NumPy 1.x imposé par TensorFlow. L’inférence tourne sur CPU et ne nécessite pas CUDA.
+## Configuration
 
-Hors installateur, les endpoints `/api/*` et `/download/*` acceptent une clé `API_KEY`; le dashboard peut être protégé avec `DASHBOARD_USERNAME` et `DASHBOARD_PASSWORD`. Dans ce cas, `/login` fournit une page de connexion dédiée et ouvre une session privée de huit heures ; les clients API conservent l’usage de `API_KEY` ou des identifiants HTTP Basic. Pour partager les sessions entre plusieurs processus, définissez aussi `DASHBOARD_SESSION_SECRET` dans `.env` ; sinon la clé API est réutilisée, ou une clé aléatoire valable jusqu’au redémarrage est créée. Sans configuration, l’authentification est désactivée pour le développement local ; n’exposez pas ce mode sur Internet. Le client Flutter de développement utilise `http://10.0.2.2:8080` par défaut. Pour une compilation personnalisée, définissez `MELODISCAN_API_URL`, `MELODISCAN_API_KEY` et `MELODISCAN_ROOT_CA_BASE64` avec `--dart-define`.
+L’installateur crée `.env` et génère les identifiants. Variables principales :
 
-L’endpoint `POST /api/v1/scan` accepte une image PNG, JPEG ou WebP, ou un document PDF, jusqu’à 20 Mio par défaut. Chaque page PDF est rasterisée à 300 DPI avant la reconnaissance Oemer ; les MusicXML produits sont fusionnés mesure par mesure dans l’ordre des pages. La conversion audio est faite avec `music21`, puis les pistes MIDI reçoivent le programme 0, une vélocité de 88 et les contrôleurs d’effets spécifiés. Les échecs de reconnaissance restent explicites.
+| Variable | Description |
+| --- | --- |
+| `API_KEY` | Protection des endpoints API et téléchargements. |
+| `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` | Connexion au dashboard ; à définir ensemble. |
+| `DASHBOARD_SESSION_SECRET` | Signature des sessions du dashboard. |
+| `MELODISCAN_HOST` | Adresse du serveur utilisée par HTTPS et l’APK. |
+| `MAX_UPLOAD_BYTES` | Taille maximale des fichiers (20 Mio par défaut). |
+| `GEMINI_API_KEY` | Extraction facultative du titre imprimé. |
 
-Le worker utilise Gemini 3.5 Flash-Lite comme seule détection automatique du titre imprimé sur le fichier original (image ou PDF), même si le MusicXML contient un titre. Cette analyse est limitée au titre : la clé Gemini est lue uniquement par le worker depuis `GEMINI_API_KEY` et ne doit jamais être intégrée à l’application mobile ni publiée. L’installateur la demande de façon masquée ; il est aussi possible de définir `GEMINI_API_KEY` dans `.env` avant l’installation ou la mise à jour. Après une modification manuelle, relancez `./install.sh` pour recréer le worker avec la nouvelle configuration. En exécution non interactive, fournissez la variable d’environnement ou renseignez `.env`. Sans clé ou si Gemini ne trouve pas de titre, l’application affiche le titre saisi manuellement ou le titre générique ; aucun autre titre détecté localement ou dans le MusicXML n’est utilisé. Les fichiers de plus de 14 Mio ne sont pas envoyés en ligne à Gemini. Pour rester sans frais et sans carte bancaire, ne liez aucun compte de facturation au projet Google AI Studio ; Google applique alors ses quotas gratuits et peut refuser les requêtes une fois le quota atteint. Les fichiers envoyés à l’offre gratuite sont soumis aux conditions de traitement des données de Google.
+Gemini traite le document d’origine pour proposer un titre. Sa clé reste dans `.env` et n’est pas intégrée à l’application. Sans Gemini, le titre saisi ou un titre générique est utilisé.
 
-Les partitions terminées sont conservées dans `data/library` (base SQLite, fichier source d’origine, MIDI et MusicXML), monté de façon persistante pour l’API et le worker. Le premier démarrage crée trois profils (`Profil 1` à `Profil 3`) ; leurs noms se modifient dans `/dashboard/profiles`. L’application demande un profil au premier lancement, le mémorise sur l’appareil, permet d’en changer, et affiche sa bibliothèque pour consulter la partition reconnue et la réécouter. Les profils sans mot de passe servent uniquement à classer les scans : ils ne constituent pas une authentification ni une séparation privée entre utilisateurs. Toute personne pouvant appeler l’API du serveur peut se faire passer pour un profil ; n’exposez donc pas l’API sans protection réseau et configuration d’accès adaptées. Sauvegardez `data/library` pour préserver les scans enregistrés.
+Ne publiez jamais `.env`, `data/firebase/service-account.json`, les clés de signature Android ni les fichiers privés de Caddy.
 
----
-
-## 🔄 Procédure de Mise à Jour du Serveur et de l'Application
-
-Pour mettre à jour le système vers la dernière version du dépôt officiel :
+## Mise à jour
 
 ```bash
 git pull origin main
 ./install.sh
 ```
 
----
+L’APK est recompilé si ses sources ou sa configuration ont changé. La clé de signature est conservée dans `data/android-config` pour permettre les mises à jour de l’application installée.
 
-## 📱 Guide de Compilation de l'APK & Tests sur Émulateur Android
+## Développement et tests
 
-### 1. Compilation du Paquet APK Release
-Pour compiler l'application Flutter localement :
+Tests backend :
+
+```bash
+backend/.venv/bin/python -m pytest backend/tests -q
+```
+
+Tests et compilation Flutter :
 
 ```bash
 cd mobile
 flutter pub get
+flutter analyze
+flutter test
 flutter build apk --release
 ```
 
-Le fichier compilé est généré dans `mobile/build/app/outputs/flutter-apk/app-release.apk` (taille ~48 Mo).
-
-Si l’APK a été compilé et copié dans `data/apk/app-release.apk`, le serveur le propose aussi à l'adresse :
-👉 **`https://<adresse-ip-du-serveur>/download/app-release.apk`**
-
-### 2. Configuration & Lancement de l'Émulateur Android (AVD)
-Pour tester l'application sur un émulateur Android :
+La suite de validation du déploiement s’exécute depuis la racine :
 
 ```bash
-# Lister les émulateurs disponibles sur votre machine
-flutter emulators
-
-# Démarrer un émulateur spécifique
-flutter emulators --launch <emulator_id>
+bash test-complet.sh
 ```
 
-### 3. Installation et Exécution de l'APK via ADB
-Une fois l'émulateur démarré :
+## Architecture
 
-```bash
-# Lister les appareils et émulateurs connectés
-adb devices
+```text
+Application Flutter ── HTTPS / SSE ── Caddy ── FastAPI ── Redis / Celery
+                                                        └── Worker Oemer / music21
+                                                             ├── Bibliothèque
+                                                             └── FCM (facultatif)
 
-# Installer l'APK généré sur l'émulateur
-adb install -r mobile/build/app/outputs/flutter-apk/app-release.apk
-
-# Ou lancer l'application en mode debug/interactif
-cd mobile
-flutter run
+Dashboard web ── API et générateur APK Android
 ```
 
----
-
-## 🚀 Architecture Logicielle & Spécifications Techniques
-
-```
-┌─────────────────────────────────────────────────────────┐
-│              SIGHT / CAPTURE (CLIENT)                   │
-│                                                         │
-│  [ Flutter Mobile Application ]                         │
-│   ├── Capture ou sélection d’une image                  │
-│   └── Envoi HTTP / suivi SSE / résultat MIDI           │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-             Protocoles :  │ HTTP Multipart (Data)
-                           │ SSE (Server-Sent Events)
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│             CORE PROCESSING (HOME SERVER)               │
-│                                                         │
-│  [ Docker Container - MelodiScan Engine ]               │
-│   ├── API Gateway (FastAPI + AsyncIO + Pydantic v2)    │
-│   ├── Task Queue (Celery / Redis)                       │
-│   ├── OMR : Oemer CLI (moteur neuronal, inclus dans l’image)│
-│   ├── Conversion : music21 + humanisation MIDI           │
-│   └── Dashboard Web & APK (si artefact présent)          │
-└─────────────────────────────────────────────────────────┘
-                           ▲
-                           │ HTTPS, CA locale approuvée
-                    ┌──────┴──────┐
-                    │ Caddy proxy │
-                    └─────────────┘
-```
-
----
-
-### Commandes de Test & Vérification
-
-#### Tests Backend (pytest) :
-```bash
-python -m pytest backend/tests/test_main.py
-```
-
-#### Tests Frontend Mobile (flutter test) :
-```bash
-cd mobile
-flutter test
-```
+Voir le [cahier des charges technique](cahier_des_charges_technique_melodiscan_industrialis.md) pour les détails.

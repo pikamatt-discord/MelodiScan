@@ -63,6 +63,7 @@ type Stats = {
 
 type Health = {
   status: string;
+  version?: string;
   dependencies: Record<string, boolean>;
 };
 
@@ -222,6 +223,7 @@ function App() {
         if (active) {
           setHealth({
             status: data.status,
+            version: data.version,
             dependencies: { api: response.ok, ...(data.dependencies ?? {}) },
           });
         }
@@ -300,6 +302,13 @@ function App() {
           <div className="topbar-right">
             <span className={`system-indicator ${health?.status === "ok" ? "online" : health ? "degraded" : ""}`}>
               <span />{health?.status === "ok" ? "Système opérationnel" : health ? "Système dégradé" : "Vérification…"}
+            </span>
+            <span
+              className="version-indicator"
+              title={health?.version ? `Version serveur déployée : ${health.version}` : "Version serveur indisponible"}
+              aria-label={health?.version ? `Version serveur ${health.version}` : "Version serveur indisponible"}
+            >
+              {health?.version ? `v${health.version}` : "v—"}
             </span>
             <button
               className="icon-button theme-toggle"

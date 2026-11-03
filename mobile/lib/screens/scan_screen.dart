@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
 import '../network/api_client.dart';
+import '../services/scan_notifications.dart';
 import '../widgets/melodiscan_background.dart';
 import '../widgets/melodiscan_logo.dart';
 import 'status_screen.dart';
@@ -147,6 +148,14 @@ class _ScanScreenState extends State<ScanScreen> {
         ),
       );
       request.fields['profile_id'] = widget.profileId;
+      try {
+        final notificationToken = await ScanNotifications.tokenForScan();
+        if (notificationToken != null) {
+          request.fields['notification_token'] = notificationToken;
+        }
+      } catch (error) {
+        _showError('Notifications indisponibles pour cette analyse : $error');
+      }
       await widget.onConnectionChanged?.call(serverUrl, apiKey);
 
       final streamedResponse =

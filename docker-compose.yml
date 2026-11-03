@@ -3,6 +3,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        MELODISCAN_VERSION: ${MELODISCAN_VERSION:-unknown}
     image: melodiscan/core-engine:latest
     container_name: melodiscan_api
     restart: always
@@ -30,6 +32,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        MELODISCAN_VERSION: ${MELODISCAN_VERSION:-unknown}
     image: melodiscan/core-engine:latest
     container_name: melodiscan_worker
     command: celery -A app.tasks worker --loglevel=info
@@ -37,9 +41,11 @@ services:
     environment:
       - REDIS_URL=redis://melodiscan-redis:6379/0
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/firebase/service-account.json
     volumes:
       - ./data/temp:/app/data/temp
       - ./data/library:/app/data/library
+      - ./data/firebase:/run/secrets/firebase:ro
     depends_on:
       - melodiscan-redis
 
@@ -54,8 +60,15 @@ services:
       - API_KEY=${API_KEY:-}
       - MELODISCAN_HOST=${MELODISCAN_HOST:-}
       - MELODISCAN_CA_PATH=/run/secrets/caddy-root.crt
+      - FIREBASE_CONFIG_PATH=/firebase/google-services.json
     volumes:
       - ./mobile:/workspace/mobile
+      - type: bind
+        source: ./data/firebase/google-services.json
+        target: /firebase/google-services.json
+        read_only: true
+        bind:
+          create_host_path: false
       - ./data/apk:/output
       - ./data/android-config:/root/.android
       - ./data/caddy-root.crt:/run/secrets/caddy-root.crt:ro

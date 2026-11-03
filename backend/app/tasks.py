@@ -6,6 +6,7 @@ from celery import Celery
 from app.gemini_title import GeminiTitleError, extract_score_title
 from app.library_store import save_completed_score
 from app.omr_engine import OMREngine, convert_musicxml_to_midi
+from app.push_notifications import send_task_notification
 from app.score_metadata import analyze_musicxml_file
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -129,7 +130,14 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
             "error": None,
         })
         _append_task_log(log_path, "Traitement terminé avec succès.")
+        notification_token = state.pop("notification_token", None)
         set_task_state(task_id, state)
+        send_task_notification(
+            task_id,
+            state["status"],
+            state["title"],
+            notification_token,
+        )
         return state
     except Exception as exc:
         preserve_upload = True
@@ -141,7 +149,15 @@ def process_omr_task(task_id: str, score_path: str, title: str) -> dict:
             "error_summary": _error_summary(exc, TASK_FAILURE_SUMMARY),
             "failed_at": datetime.now(timezone.utc).isoformat(),
         })
+        notification_token = state.pop("notification_token", None)
         set_task_state(task_id, state)
+        send_task_notification(
+            task_id,
+            state["status"],
+            state.get("title") or title,
+            notification_token,
+            state["error_summary"],
+        )
         raise
     finally:
         if not preserve_upload:
